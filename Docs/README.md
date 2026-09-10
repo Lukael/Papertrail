@@ -28,6 +28,16 @@ WebKit 보조 프로세스를 실행해야 하므로 제한된 샌드박스에�
 DEVELOPER_DIR=/Library/Developer/CommandLineTools swift run --disable-sandbox ChatMathTests --web-scroll
 ```
 
+반복 입력 전달은 앱의 실제 스크롤 라우터를 직접 컴파일해 검사합니다. 사용자 앱에 입력을 보내지 않습니다.
+
+```sh
+mkdir -p .build/scenarios/scroll-stutter
+swiftc -module-cache-path .build/ModuleCache -parse-as-library \
+  Sources/PapertrailApp/ChatMathWebView.swift Tests/ChatScrollRoutingTests.swift \
+  -o .build/scenarios/scroll-stutter/ChatScrollRoutingTests
+.build/scenarios/scroll-stutter/ChatScrollRoutingTests
+```
+
 ## 실제 Codex 생성
 
 다음 하네스는 별도 라이브러리에 합성 논문과 완료된 대화를 넣고 실제 Codex를 호출합니다.

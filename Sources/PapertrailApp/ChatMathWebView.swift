@@ -46,8 +46,10 @@ struct ChatMathWebView: NSViewRepresentable {
 
   final class MathContainerView: NSView {
     let webView: SizingWebView
-    private var scrollMonitor: Any?
-    private var forwardingVerticalGesture = false
+    private static var scrollMonitor: Any?
+    private static var monitoredViewCount = 0
+    private static weak var forwardedTranscript: NSScrollView?
+    private var isMonitoringScroll = false
 
     init(webView: SizingWebView) {
       self.webView = webView
@@ -68,41 +70,62 @@ struct ChatMathWebView: NSViewRepresentable {
       super.viewDidMoveToWindow()
       removeScrollMonitor()
       guard window != nil else { return }
-      // WebKit's private content view receives wheel events before WKWebView.
-      // Forward only vertical gestures over this message to the transcript;
-      // Purely horizontal gestures stay in WebKit for wide equations. Even a
-      // horizontal-dominant diagonal event must not scroll a message vertically.
-      scrollMonitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self] event in
-        guard let self, let window = self.window, event.window === window,
-          let content = window.contentView,
-          let hit = content.hitTest(content.convert(event.locationInWindow, from: nil)),
-          hit === self.webView || hit.isDescendant(of: self.webView)
-        else { return event }
-        let vertical = event.scrollingDeltaY != 0
-        let ending = event.scrollingDeltaX == 0 && event.scrollingDeltaY == 0
-          && self.forwardingVerticalGesture
-        guard vertical || ending else {
-          self.forwardingVerticalGesture = false
-          return event
-        }
-        var ancestor = self.superview
-        while let view = ancestor {
-          if let transcript = view as? NSScrollView {
-            self.forwardingVerticalGesture = !event.phase.contains(.ended)
-              && !event.phase.contains(.cancelled) && !event.momentumPhase.contains(.ended)
-            transcript.scrollWheel(with: event)
-            return nil
-          }
-          ancestor = view.superview
-        }
-        return event
+      isMonitoringScroll = true
+      Self.monitoredViewCount += 1
+      guard Self.scrollMonitor == nil else { return }
+      // One monitor for all math messages. Hit-testing once per wheel event avoids
+      // repeating a full window traversal for every message in a long transcript.
+      Self.scrollMonitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { event in
+        guard let window = event.window, let content = window.contentView else { return event }
+        let hit = content.hitTest(content.convert(event.locationInWindow, from: nil))
+        return Self.routeScroll(event, startingAt: hit)
       }
     }
 
+    static func routeScroll(_ event: NSEvent, startingAt hit: NSView?) -> NSEvent? {
+      var ancestor = hit
+      while let view = ancestor {
+        if let message = view as? MathContainerView {
+          return message.forwardScroll(event)
+        }
+        ancestor = view.superview
+      }
+      return event
+    }
+
+    private func forwardScroll(_ event: NSEvent) -> NSEvent? {
+      let vertical = event.scrollingDeltaY != 0
+      let ending = event.scrollingDeltaX == 0 && event.scrollingDeltaY == 0
+        && Self.forwardedTranscript != nil
+      // Purely horizontal gestures remain available to wide display equations.
+      guard vertical || ending else {
+        Self.forwardedTranscript = nil
+        return event
+      }
+      var ancestor = superview
+      while let view = ancestor {
+        if let transcript = view as? NSScrollView {
+          guard vertical || Self.forwardedTranscript === transcript else { return event }
+          let finished = event.phase.contains(.ended) || event.phase.contains(.cancelled)
+            || event.momentumPhase.contains(.ended)
+          Self.forwardedTranscript = finished ? nil : transcript
+          transcript.scrollWheel(with: event)
+          return nil
+        }
+        ancestor = view.superview
+      }
+      return event
+    }
+
     func removeScrollMonitor() {
-      if let scrollMonitor { NSEvent.removeMonitor(scrollMonitor) }
-      scrollMonitor = nil
-      forwardingVerticalGesture = false
+      guard isMonitoringScroll else { return }
+      isMonitoringScroll = false
+      Self.monitoredViewCount -= 1
+      if Self.monitoredViewCount == 0, let monitor = Self.scrollMonitor {
+        NSEvent.removeMonitor(monitor)
+        Self.scrollMonitor = nil
+        Self.forwardedTranscript = nil
+      }
     }
   }
 
