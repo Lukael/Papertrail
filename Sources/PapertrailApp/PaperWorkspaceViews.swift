@@ -301,6 +301,11 @@ struct PaperLibraryView: View {
         Button("Done") { showsAppInformation = false }
           .keyboardShortcut(.defaultAction)
       }
+      if let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String {
+        Text("v\(version)")
+          .font(.subheadline.monospacedDigit())
+          .foregroundStyle(.secondary)
+      }
       VStack(alignment: .leading, spacing: 5) {
         Label("Private local storage", systemImage: "lock.laptopcomputer")
           .font(.callout.weight(.semibold))
