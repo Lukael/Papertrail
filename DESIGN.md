@@ -113,6 +113,7 @@
 
 - Render inline and display LaTeX in both user and assistant chat messages, using the existing message typography and appearance.
 - Preserve code spans, unfinished input, and stored message source. Unsupported expressions remain readable rather than disappearing.
+- Vertical scrolling belongs to the transcript, including diagonal gestures over math. Individual messages must not scroll vertically.
 - Keep dates, selection, and source copy available; resize math messages with the chat column and allow horizontal scrolling for long display equations.
 - Use bundled local KaTeX to produce static MathML; no remote fonts, CDN requests, or page scripts.
 

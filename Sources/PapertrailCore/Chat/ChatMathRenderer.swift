@@ -109,7 +109,8 @@ public final class ChatMathRenderer {
       <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; connect-src 'none'; img-src 'none'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
       <style>
       :root { color-scheme: light dark; font: 13px -apple-system, BlinkMacSystemFont, system-ui, sans-serif; }
-      html, body { margin: 0; padding: 0; background: transparent; color: CanvasText; }
+      /* Keep the document viewport fixed; #content retains its natural height for native sizing. */
+      html, body { height: 100%; margin: 0; padding: 0; background: transparent; color: CanvasText; overflow: clip; }
       #content { overflow-wrap: anywhere; }
       .text { white-space: pre-wrap; }
       .math-inline { display: inline; white-space: normal; }

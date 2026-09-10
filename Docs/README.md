@@ -19,6 +19,15 @@ done
 2026-09-10 수동 문서 생성 시나리오에서는 D/E/F/G/H 총 91개 그룹을 통과했습니다.
 A/C는 이 91개 집계에 포함되지 않습니다.
 
+## WebKit 메시지 스크롤 회귀 검사
+
+macOS 로그인 세션에서 아래 명령으로 실제 WebKit의 메시지 내부 스크롤을 검사합니다.
+WebKit 보조 프로세스를 실행해야 하므로 제한된 샌드박스에서는 실행되지 않을 수 있습니다.
+
+```sh
+DEVELOPER_DIR=/Library/Developer/CommandLineTools swift run --disable-sandbox ChatMathTests --web-scroll
+```
+
 ## 실제 Codex 생성
 
 다음 하네스는 별도 라이브러리에 합성 논문과 완료된 대화를 넣고 실제 Codex를 호출합니다.
