@@ -1,0 +1,26 @@
+# Swift build output and local Xcode state
+/.build/
+/.swiftpm/
+/DerivedData/
+xcuserdata/
+*.xcuserstate
+
+# Locally packaged application
+/Papertrail.app/
+/.Papertrail.app.building/
+
+# Agent runtime state and logs
+/.omx/
+
+# Local environment values (keep example configuration shareable)
+.env
+.env.*
+!.env.example
+!.env.sample
+
+# Finder metadata and reproducible verification output
+.DS_Store
+/Docs/Gate*/evidence/
+
+# Intermediate icon exports; keep the original PNG and packaged .icns
+/Sources/PapertrailApp/Resources/Papertrail.iconset/

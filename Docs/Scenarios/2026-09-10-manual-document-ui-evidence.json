@@ -1,0 +1,32 @@
+{
+  "versionPath": "/Users/lukael/Develop/Papertrail/.build/scenarios/manual-document/ui-library/Papertrail/Papers/3fc6a75e-7c88-4f11-9e0c-efd6903c8bf1/generations/ddf4050c-71a2-448f-95aa-891d173a0296/review/2b3cf4ac-7024-4699-86a9-a8207dd30a5e/index.html",
+  "versionSHA256": "73ea370407245a6e3ec12ec5026ee70292814fc886fcd318d85cacb4a053753a",
+  "generationsBeforeRestartedManualClick": [
+    [
+      "turnCompleted",
+      "passed"
+    ]
+  ],
+  "sessionThreads": [
+    [
+      "paperChat",
+      "01a08964-1855-7833-9ab9-2e0182163008"
+    ],
+    [
+      "reviewGeneration",
+      "01a08964-e578-75a0-944e-8ab32abcb8bb"
+    ]
+  ],
+  "generationsAfterCancel": [
+    [
+      "turnCompleted",
+      "passed"
+    ],
+    [
+      "cancelled",
+      "notRun"
+    ]
+  ],
+  "selectedVersionAfterCancel": "2B3CF4AC7024469986A9A8207DD30A5E",
+  "originalHTMLUnchanged": true
+}

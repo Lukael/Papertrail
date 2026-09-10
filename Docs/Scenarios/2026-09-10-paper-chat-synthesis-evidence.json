@@ -1,0 +1,38 @@
+{
+  "scenario": "paper-plus-completed-chat",
+  "status": "passed",
+  "startedAt": "2026-09-10T03:36:19Z",
+  "finishedAt": "2026-09-10T03:39:27Z",
+  "timeoutSeconds": 240,
+  "isolatedLibrary": ".build/scenarios/paper-chat-synthesis-20260910T152000",
+  "sourceFixtureSHA256": "287a35182af3959a82d47294f0cb4d79f4cd6b179c540a906264c6f45a738f04",
+  "conversationSHA256": "b89a58d3eae9d3f94ced01e634478f11133fc5105456e869324aafa82e38acf5",
+  "productionPromptSHA256": "13e9a47d753edfe57bb5111dd52c1cc4e4611e32dbbf18cea34c420a783d0300",
+  "structuredReviewSHA256": "88a6e3581f039a8d421f25aff4b5b1e105fff66de45f24cf897e6148f31419dc",
+  "processOutcome": "turnCompleted",
+  "structuralValidation": "passed",
+  "promotionPhase": "selected",
+  "selected": true,
+  "conversationMessageIDs": [
+    "bfa7c1a4-a574-4f31-af75-db7eb901f0e3",
+    "1bde23f6-277c-408f-920f-319c954a2014"
+  ],
+  "generatedDiscussion": [
+    {
+      "kind": "question",
+      "messageIDs": ["bfa7c1a4-a574-4f31-af75-db7eb901f0e3"],
+      "text": "사용자는 논문의 결론이 센서 잡음 크기에 민감한지와 이를 직접 검증한 실험이 있는지를 물었다."
+    },
+    {
+      "kind": "interpretation",
+      "messageIDs": ["1bde23f6-277c-408f-920f-319c954a2014"],
+      "text": "대화에서는 논문 본문에 센서 잡음 민감도를 직접 변화시킨 실험이 보고되지 않았다고 해석했다."
+    },
+    {
+      "kind": "openQuestion",
+      "messageIDs": ["1bde23f6-277c-408f-920f-319c954a2014"],
+      "text": "잡음 수준별 재평가를 통해 결론의 센서 잡음 민감도를 확인하는 일이 미해결 질문으로 남는다."
+    }
+  ],
+  "claimBoundary": "실제 Codex와 production prompt를 사용한 격리 실행이다. 완료된 채팅 캡처, 실제 메시지 UUID 참조, 센서 잡음 논의의 종합, 구조 검증, 승격 및 선택을 확인했다. 광범위한 내용 품질과 시각 품질 평가는 포함하지 않는다."
+}

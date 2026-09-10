@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; font-src 'none'; connect-src 'none'; frame-src 'none'; form-action 'none'; base-uri 'none'; object-src 'none'; media-src 'none'">
+  <title>Restricted review fixture</title>
+  <style>
+    body { margin: 0; color: #172033; background: #f7f8fa; font: 16px -apple-system, BlinkMacSystemFont, sans-serif; }
+    main { max-width: 820px; margin: 34px auto; padding: 42px 52px; background: white; border-radius: 18px; box-shadow: 0 12px 36px #17203318; }
+    h1 { font-size: 30px; margin: 0 0 8px; }
+    .eyebrow { color: #3266cc; font-weight: 650; letter-spacing: .04em; text-transform: uppercase; font-size: 12px; }
+    .finding { border-left: 4px solid #3266cc; padding: 12px 16px; background: #eef4ff; margin: 24px 0; }
+    footer { border-top: 1px solid #dde2ea; margin-top: 28px; padding-top: 18px; color: #5d6677; font-size: 13px; }
+    .threat-controls { display: grid; grid-template-columns: repeat(4, 1fr); align-items: stretch; height: 72px; background: #172033; color: white; }
+    .threat-controls a, .threat-controls label { display: flex; align-items: center; justify-content: center; color: #bcd3ff; position: relative; }
+    .threat-controls input[type=file] { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer; }
+  </style>
+  <link rel="stylesheet" href="http://127.0.0.1:8765/remote.css">
+  <script src="http://127.0.0.1:8765/remote.js"></script>
+</head>
+<body onload="fetch('http://127.0.0.1:8765/fetch')">
+  <nav class="threat-controls">
+    <a id="external-link" href="https://doi.org/10.0000/example">External DOI</a>
+    <a id="popup-link" href="https://doi.org/10.0000/popup" target="_blank">Popup DOI</a>
+    <a id="download-link" href="download.bin" download>Download</a>
+    <label>Choose file <input id="file-input" type="file"></label>
+  </nav>
+  <main>
+    <div class="eyebrow">Generated · structure checked</div>
+    <h1>Signals in a Small Synthetic Sensor Array</h1>
+    <p>This fixture exercises the restricted local review reader. Generated evidence remains unverified until a human review is recorded.</p>
+    <div class="finding"><strong>Primary finding.</strong> The reported effect is internally consistent, while external validity remains limited by the synthetic sample.</div>
+    <p><a href="https://doi.org/10.0000/example">Publication DOI</a> · <a href="#evidence">Jump to evidence</a></p>
+    <img src="http://127.0.0.1:8765/image.png" alt="blocked remote image">
+    <iframe src="http://127.0.0.1:8765/frame"></iframe>
+    <form action="http://127.0.0.1:8765/form"><button>Submit</button></form>
+    <object data="http://127.0.0.1:8765/object"></object>
+    <section id="evidence"><h2>Evidence note</h2><blockquote lang="en">Signals were recorded from sixteen synthetic sensor channels.</blockquote></section>
+    <footer>Private local review · JavaScript and remote resources disabled</footer>
+  </main>
+</body>
+</html>
