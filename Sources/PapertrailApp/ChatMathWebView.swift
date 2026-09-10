@@ -70,14 +70,15 @@ struct ChatMathWebView: NSViewRepresentable {
       guard window != nil else { return }
       // WebKit's private content view receives wheel events before WKWebView.
       // Forward only vertical gestures over this message to the transcript;
-      // horizontal gestures stay in WebKit for wide equations.
+      // Purely horizontal gestures stay in WebKit for wide equations. Even a
+      // horizontal-dominant diagonal event must not scroll a message vertically.
       scrollMonitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self] event in
         guard let self, let window = self.window, event.window === window,
           let content = window.contentView,
           let hit = content.hitTest(content.convert(event.locationInWindow, from: nil)),
           hit === self.webView || hit.isDescendant(of: self.webView)
         else { return event }
-        let vertical = abs(event.scrollingDeltaY) > abs(event.scrollingDeltaX)
+        let vertical = event.scrollingDeltaY != 0
         let ending = event.scrollingDeltaX == 0 && event.scrollingDeltaY == 0
           && self.forwardingVerticalGesture
         guard vertical || ending else {

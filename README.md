@@ -41,3 +41,10 @@ open Papertrail.app
 - [UI 설계](DESIGN.md): 화면 구성과 상호작용
 - [검증 안내](Docs/README.md): 테스트 실행 방법과 산출물 관리
 - [최근 시나리오 결과](Docs/Scenarios/2026-09-10-manual-document-scenarios.md): 실제 앱·Codex 검증 및 한계
+
+## 릴리스 브랜치
+
+Git Flow 기준으로 `main`은 배포 이력, `develop`은 다음 개발 기준으로 사용합니다.
+긴급 수정은 배포 태그에서 `hotfix/<version>` 브랜치를 만들고, 검증 후 `main`과
+`develop`에 merge commit으로 반영합니다. 배포 태그 `v<version>`은 `main`의 해당
+릴리스 커밋에 생성하고 GitHub Release에 앱 ZIP과 SHA-256 체크섬을 첨부합니다.
