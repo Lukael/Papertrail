@@ -46,7 +46,11 @@ func expect(_ actual: [ChatMathContent.Segment], _ expected: [ChatMathContent.Se
       print("PASS ChatMathTests parser \(cases.count)/\(cases.count)")
     } else {
       try testMathRenderer()
-      print("PASS ChatMathTests \(cases.count + 1)/\(cases.count + 1)")
+      if CommandLine.arguments.contains("--web-scroll") {
+        try testWebKitScrollIsolation()
+      }
+      let suiteCount = cases.count + 1 + (CommandLine.arguments.contains("--web-scroll") ? 1 : 0)
+      print("PASS ChatMathTests \(suiteCount)/\(suiteCount)")
     }
   }
 }
