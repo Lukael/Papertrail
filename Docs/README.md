@@ -28,14 +28,13 @@ WebKit 보조 프로세스를 실행해야 하므로 제한된 샌드박스에�
 DEVELOPER_DIR=/Library/Developer/CommandLineTools swift run --disable-sandbox ChatMathTests --web-scroll
 ```
 
-반복 입력 전달은 앱의 실제 스크롤 라우터를 직접 컴파일해 검사합니다. 사용자 앱에 입력을 보내지 않습니다.
+트랙패드 회귀 검사는 전체 제스처 1,000회와 실제 SwiftUI 채팅 View의 관성 이동을 검사합니다.
+일반 채팅 60개와 수식 포함 채팅 20개를 별도 창에 표시하며 사용자 앱에 입력을 보내지 않습니다.
+로그는 `.build/scenarios/scroll-render`에 저장합니다. 합성 이벤트 검사이므로 물리 트랙패드의
+WindowServer 전달 경로와 실제 프레임 속도 측정을 대신하지 않습니다.
 
 ```sh
-mkdir -p .build/scenarios/scroll-stutter
-swiftc -module-cache-path .build/ModuleCache -parse-as-library \
-  Sources/PapertrailApp/ChatMathWebView.swift Tests/ChatScrollRoutingTests.swift \
-  -o .build/scenarios/scroll-stutter/ChatScrollRoutingTests
-.build/scenarios/scroll-stutter/ChatScrollRoutingTests
+python3 Scripts/verify-chat-scroll.py
 ```
 
 ## 실제 Codex 생성

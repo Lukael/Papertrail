@@ -674,6 +674,7 @@ private struct PaperChatView: View {
             .frame(maxWidth: 780)
             .frame(maxWidth: .infinity, alignment: .center)
             .padding()
+            .background(ChatScrollBoundaryView())
           }
           // Keep the transcript and the native scroll indicator out of the
           // trailing question-navigation rail, including at narrow widths.
