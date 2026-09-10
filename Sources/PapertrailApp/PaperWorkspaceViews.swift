@@ -603,19 +603,14 @@ private struct PaperChatView: View {
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @State private var activeQuestionID: UUID?
   @State private var isTranscriptNearBottom = true
-  @State private var transcriptViewportHeight: CGFloat = 0
-  @State private var transcriptBottomOffset: CGFloat?
-
-  private var questions: [ChatMessageRecord] {
-    controller.messages.filter { $0.role == "user" }
-  }
-
-  private var questionNumbers: [UUID: Int] {
-    Dictionary(uniqueKeysWithValues: questions.enumerated().map { ($0.element.id, $0.offset + 1) })
-  }
+  @State private var transcriptMetrics = ChatTranscriptMetrics()
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 0) {
+    let questions = controller.messages.filter { $0.role == "user" }
+    let questionNumbers = Dictionary(
+      uniqueKeysWithValues: questions.enumerated().map { ($0.element.id, $0.offset + 1) })
+
+    return VStack(alignment: .leading, spacing: 0) {
       HStack {
         Label("Paper chat", systemImage: "bubble.left.and.bubble.right").font(.headline)
         Spacer()
@@ -679,6 +674,7 @@ private struct PaperChatView: View {
             .frame(maxWidth: 780)
             .frame(maxWidth: .infinity, alignment: .center)
             .padding()
+            .background(ChatScrollBoundaryView())
           }
           // Keep the transcript and the native scroll indicator out of the
           // trailing question-navigation rail, including at narrow widths.
@@ -692,14 +688,14 @@ private struct PaperChatView: View {
             }
           }
           .onPreferenceChange(ChatViewportHeightPreferenceKey.self) { height in
-            transcriptViewportHeight = height
+            transcriptMetrics.viewportHeight = height
             updateTranscriptFollowState()
           }
           .onPreferenceChange(ChatQuestionOffsetPreferenceKey.self) { offsets in
             updateActiveQuestion(from: offsets)
           }
           .onPreferenceChange(ChatBottomOffsetPreferenceKey.self) { bottomOffset in
-            transcriptBottomOffset = bottomOffset
+            transcriptMetrics.bottomOffset = bottomOffset
             updateTranscriptFollowState()
           }
 
@@ -758,12 +754,13 @@ private struct PaperChatView: View {
   }
 
   private func updateTranscriptFollowState() {
-    guard transcriptViewportHeight > 0 else { return }
-    guard let transcriptBottomOffset else {
-      isTranscriptNearBottom = false
-      return
+    guard transcriptMetrics.viewportHeight > 0 else { return }
+    let isNearBottom = transcriptMetrics.bottomOffset.map {
+      $0 <= transcriptMetrics.viewportHeight + 96
+    } ?? false
+    if isNearBottom != isTranscriptNearBottom {
+      isTranscriptNearBottom = isNearBottom
     }
-    isTranscriptNearBottom = transcriptBottomOffset <= transcriptViewportHeight + 96
   }
 
   private func scroll(_ proxy: ScrollViewProxy, to questionID: UUID, anchor: UnitPoint) {
@@ -825,6 +822,13 @@ private struct PaperChatView: View {
     }
     .shadow(color: .black.opacity(0.06), radius: 8, y: 2)
   }
+}
+
+/// High-frequency geometry samples must not invalidate the full transcript.
+/// Only derived navigation/follow-state changes are published through SwiftUI state.
+private final class ChatTranscriptMetrics {
+  var viewportHeight: CGFloat = 0
+  var bottomOffset: CGFloat?
 }
 
 private struct ChatQuestionOffsetPreferenceKey: PreferenceKey {

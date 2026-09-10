@@ -37,7 +37,6 @@ struct ChatMathWebView: NSViewRepresentable {
   }
 
   static func dismantleNSView(_ container: MathContainerView, coordinator: Coordinator) {
-    container.removeScrollMonitor()
     let view = container.webView
     view.onWidthChanged = nil
     view.navigationDelegate = nil
@@ -46,8 +45,6 @@ struct ChatMathWebView: NSViewRepresentable {
 
   final class MathContainerView: NSView {
     let webView: SizingWebView
-    private var scrollMonitor: Any?
-    private var forwardingVerticalGesture = false
 
     init(webView: SizingWebView) {
       self.webView = webView
@@ -63,47 +60,6 @@ struct ChatMathWebView: NSViewRepresentable {
     }
 
     required init?(coder: NSCoder) { nil }
-
-    override func viewDidMoveToWindow() {
-      super.viewDidMoveToWindow()
-      removeScrollMonitor()
-      guard window != nil else { return }
-      // WebKit's private content view receives wheel events before WKWebView.
-      // Forward only vertical gestures over this message to the transcript;
-      // Purely horizontal gestures stay in WebKit for wide equations. Even a
-      // horizontal-dominant diagonal event must not scroll a message vertically.
-      scrollMonitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self] event in
-        guard let self, let window = self.window, event.window === window,
-          let content = window.contentView,
-          let hit = content.hitTest(content.convert(event.locationInWindow, from: nil)),
-          hit === self.webView || hit.isDescendant(of: self.webView)
-        else { return event }
-        let vertical = event.scrollingDeltaY != 0
-        let ending = event.scrollingDeltaX == 0 && event.scrollingDeltaY == 0
-          && self.forwardingVerticalGesture
-        guard vertical || ending else {
-          self.forwardingVerticalGesture = false
-          return event
-        }
-        var ancestor = self.superview
-        while let view = ancestor {
-          if let transcript = view as? NSScrollView {
-            self.forwardingVerticalGesture = !event.phase.contains(.ended)
-              && !event.phase.contains(.cancelled) && !event.momentumPhase.contains(.ended)
-            transcript.scrollWheel(with: event)
-            return nil
-          }
-          ancestor = view.superview
-        }
-        return event
-      }
-    }
-
-    func removeScrollMonitor() {
-      if let scrollMonitor { NSEvent.removeMonitor(scrollMonitor) }
-      scrollMonitor = nil
-      forwardingVerticalGesture = false
-    }
   }
 
   final class SizingWebView: WKWebView {
