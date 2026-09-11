@@ -37,6 +37,22 @@ WindowServer 전달 경로와 실제 프레임 속도 측정을 대신하지 않
 python3 Scripts/verify-chat-scroll.py
 ```
 
+## 논문 정렬과 긴 대화 전환
+
+`verify-chat-scroll.py`는 최근 40개 표시 범위와 과거 질문 확장 검사를 포함합니다.
+400개 메시지의 전체 렌더 방식과 현재 방식을 별도 네이티브 창에서 비교해
+수식 WebView 수와 초기 레이아웃 시간을 `.build/scenarios/scroll-render`에 기록합니다.
+
+```sh
+swiftc -parse-as-library Sources/PapertrailApp/PaperListSorting.swift Tests/PaperListSortingTests.swift -o .build/PaperListSortingTests
+.build/PaperListSortingTests
+python3 Scripts/verify-chat-store-query.py
+```
+
+SwiftData 조회 검사는 메모리 저장소의 다른 논문 메시지 2,000개와 대상 메시지를 섞어
+백그라운드 조회의 논문 격리·동일 시각 정렬·빈 기록을 확인합니다. 실제 사용자 저장소는
+열지 않습니다. 전체 Xcode가 필요합니다.
+
 ## 실제 Codex 생성
 
 다음 하네스는 별도 라이브러리에 합성 논문과 완료된 대화를 넣고 실제 Codex를 호출합니다.
