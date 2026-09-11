@@ -27,7 +27,7 @@
 
 ## Information architecture
 
-- Primary navigation: native `NavigationSplitView` paper sidebar with a persisted Name / Upload date / Recent chat picker. Upload and recent chat sort newest first; recent chat uses user message activity.
+- Primary navigation: native `NavigationSplitView` paper sidebar with a title search field and a persisted Name / Upload date / Recent chat picker. Upload and recent chat sort newest first; recent chat uses user message activity.
 - Core screens: import confirmation; paper workspace with independent Paper and Review visibility toggles plus persistent right Chat; sidebar rename dialog; destructive delete confirmation.
 - Content hierarchy: global toolbar controls and on-demand app information, resizable source area that shows Paper, Review, or both, persistent paper chat pane, persistent one-line activity log with expandable history.
 
@@ -65,6 +65,7 @@
 
 - Existing components to reuse: `PaperLibraryView`, `PaperWorkspaceView`, and `PDFDocumentView` from the reference implementation.
 - New/changed components: `ChatMessageRow` separates chat roles, marks question anchors, and shows persisted timestamps; `ChatQuestionRail` exposes translucent trailing-edge transcript navigation with hover previews; `ActivityLogBar` shows diagnostics; `PaperWorkspaceView` owns the resizable source/chat split and full-height review reader; the sidebar context menu owns rename, supplementary-PDF, and delete actions; the toolbar information panel contains storage and authority disclosures.
+- Tag editing: each sidebar row shows tags below its title and an accessible tag button. A native sheet supports staged add/remove, pending-input Save, Cancel, and inline persistence errors; the context menu exposes the same editor. Title search preserves the selected sort and has a clear action and no-results state.
 - Variants and states: committed, draft, failed/retry, generating/cancel, loading conversation, empty conversation. Long conversations initially show the latest 40 messages; Load earlier messages reveals another 40 while preserving the reading anchor. Selecting an older question reveals its history before navigation. The question rail scrolls within 320pt so long histories do not enlarge the workspace.
 - Token/component ownership: system semantic colors, materials, typography, and SF Symbols remain owned by SwiftUI.
 

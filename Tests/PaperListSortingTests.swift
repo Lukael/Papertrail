@@ -29,6 +29,17 @@ enum PaperListSortingTests {
     precondition(updated.lastChatAt == base.addingTimeInterval(60))
     precondition(updated.notingChatActivity(at: base).lastChatAt == base.addingTimeInterval(60))
 
+    let sorted = PaperListSorter.sort(papers, by: .uploaded)
+    precondition(PaperListFilter.matching(sorted, title: "  aLpHa  ").map(\.id) == [secondID, firstID])
+    precondition(PaperListFilter.matching(sorted, title: "\n ") == sorted)
+    precondition(PaperListFilter.matching(sorted, title: "missing").isEmpty)
+    let korean = item(id: firstID, title: "인공지능 논문", uploaded: base, chatted: nil)
+    precondition(PaperListFilter.matching([korean], title: "논문").count == 1)
+    var tagged = papers[0]
+    tagged.tags = ["Vision", "읽을 논문"]
+    precondition(tagged.notingChatActivity(at: base).tags == tagged.tags)
+    precondition(PaperListFilter.matching([tagged], title: "Vision").isEmpty)
+
     let defaults = UserDefaults(suiteName: "PaperListSortingTests")!
     defaults.removePersistentDomain(forName: "PaperListSortingTests")
     precondition(PaperSortOrder.load(defaults: defaults) == .name)
@@ -36,7 +47,7 @@ enum PaperListSortingTests {
     precondition(PaperSortOrder.load(defaults: defaults) == .recentChat)
     defaults.removePersistentDomain(forName: "PaperListSortingTests")
 
-    print("PASS paper list sorting: name, upload time, recent user chat, stable ties")
+    print("PASS paper list sorting and title search: stable order, case, whitespace, Korean, empty results, tag retention")
   }
 
   private static func item(

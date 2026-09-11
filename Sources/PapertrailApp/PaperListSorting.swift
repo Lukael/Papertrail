@@ -36,12 +36,13 @@ struct PaperListItem: Identifiable, Hashable, Sendable {
   let scale: Double
   let createdAt: Date
   let lastChatAt: Date?
+  var tags: [String] = []
 
   func notingChatActivity(at date: Date) -> Self {
     Self(
       id: id, title: title, sourceRelativePath: sourceRelativePath,
       sourceSHA256: sourceSHA256, pageIndex: pageIndex, scale: scale,
-      createdAt: createdAt, lastChatAt: max(lastChatAt ?? .distantPast, date))
+      createdAt: createdAt, lastChatAt: max(lastChatAt ?? .distantPast, date), tags: tags)
   }
 }
 
@@ -68,5 +69,13 @@ enum PaperListSorter {
       }
       return lhs.id.uuidString < rhs.id.uuidString
     }
+  }
+}
+
+enum PaperListFilter {
+  static func matching(_ papers: [PaperListItem], title query: String) -> [PaperListItem] {
+    let query = query.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !query.isEmpty else { return papers }
+    return papers.filter { $0.title.localizedCaseInsensitiveContains(query) }
   }
 }

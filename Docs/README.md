@@ -53,6 +53,30 @@ SwiftData 조회 검사는 메모리 저장소의 다른 논문 메시지 2,000�
 백그라운드 조회의 논문 격리·동일 시각 정렬·빈 기록을 확인합니다. 실제 사용자 저장소는
 열지 않습니다. 전체 Xcode가 필요합니다.
 
+## 논문 검색과 태그
+
+제목 검색과 정렬의 결합은 `PaperListSortingTests`에서 검사합니다. 태그 저장소 검사는
+임시 라이브러리만 사용하며 실제 사용자 태그를 변경하지 않습니다.
+
+```sh
+mkdir -p .build/scenarios/paper-search-tags
+swiftc -module-cache-path .build/ModuleCache -parse-as-library -D PPR_PORTABLE_SCHEMA \
+  Sources/PapertrailCore/Storage/LibraryPaths.swift Sources/PapertrailCore/Storage/PaperTagStore.swift \
+  Tests/PaperTagStoreTests.swift -o .build/scenarios/paper-search-tags/PaperTagStoreTests
+.build/scenarios/paper-search-tags/PaperTagStoreTests
+```
+
+태그 편집창의 키보드 입력·추가·저장 검사는 격리된 네이티브 창에서 실행합니다.
+현재 자동화 환경에서 SwiftUI 버튼의 접근성 클릭과 전체 비트맵 렌더링은 지원되지 않아,
+삭제·취소 버튼 클릭 및 전체 외관은 이 검사에서 보장하지 않습니다.
+
+```sh
+swiftc -module-cache-path .build/ModuleCache -parse-as-library \
+  Sources/PapertrailApp/PaperListSorting.swift Sources/PapertrailApp/PaperTagsEditor.swift \
+  Tests/PaperTagsEditorTests.swift -o .build/scenarios/paper-search-tags/PaperTagsEditorTests
+.build/scenarios/paper-search-tags/PaperTagsEditorTests
+```
+
 ## 실제 Codex 생성
 
 다음 하네스는 별도 라이브러리에 합성 논문과 완료된 대화를 넣고 실제 Codex를 호출합니다.

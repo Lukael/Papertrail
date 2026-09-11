@@ -31,6 +31,8 @@ struct PaperLibraryView: View {
   @State private var paperPendingRename: PaperListItem?
   @State private var editedPaperTitle = ""
   @State private var showsAppInformation = false
+  @State private var titleQuery = ""
+  @State private var paperEditingTags: PaperListItem?
 
   #if PPR_PORTABLE_SCHEMA
     init(paths: LibraryPaths, launchRepairMessage: String?) {
@@ -49,18 +51,59 @@ struct PaperLibraryView: View {
     controller.papers.first(where: { $0.id == selectedPaperID })
   }
 
+  private var matchingPapers: [PaperListItem] {
+    PaperListFilter.matching(controller.papers, title: titleQuery)
+  }
+
   var body: some View {
     NavigationSplitView {
       VStack(spacing: 0) {
+        HStack(spacing: 6) {
+          Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+          TextField("Search paper titles", text: $titleQuery)
+            .textFieldStyle(.plain)
+            .accessibilityLabel("Search paper titles")
+          if !titleQuery.isEmpty {
+            Button { titleQuery = "" } label: {
+              Image(systemName: "xmark.circle.fill")
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Clear search")
+          }
+        }
+        .padding(8)
+        .background(.quaternary, in: RoundedRectangle(cornerRadius: 8))
+        .padding(.horizontal, 10)
+        .padding(.top, 10)
         Picker("Sort papers", selection: $controller.sortOrder) {
           ForEach(PaperSortOrder.allCases, id: \.self) { order in
             Text(order.title).tag(order)
           }
         }
         .padding(10)
-        List(controller.papers, selection: $selectedPaperID) { paper in
-          Text(paper.title).tag(paper.id)
+        List(matchingPapers, selection: $selectedPaperID) { paper in
+          HStack(alignment: .top, spacing: 8) {
+            VStack(alignment: .leading, spacing: 5) {
+              Text(paper.title)
+              if !paper.tags.isEmpty {
+                Text(paper.tags.map { "#\($0)" }.joined(separator: "  "))
+                  .font(.caption)
+                  .foregroundStyle(.secondary)
+                  .lineLimit(2)
+                  .help(paper.tags.joined(separator: ", "))
+              }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            Button { paperEditingTags = paper } label: {
+              Image(systemName: "tag")
+            }
+            .buttonStyle(.borderless)
+            .help("Edit tags")
+            .accessibilityLabel("Edit tags for \(paper.title)")
+          }
+          .tag(paper.id)
             .contextMenu {
+              Button("Edit Tags…", systemImage: "tag") { paperEditingTags = paper }
               Button("Rename…", systemImage: "pencil") {
                 editedPaperTitle = paper.title
                 paperPendingRename = paper
@@ -79,6 +122,10 @@ struct PaperLibraryView: View {
             ContentUnavailableView(
               "No papers", systemImage: "doc.richtext",
               description: Text("Import a local PDF or drop one into this window."))
+          } else if matchingPapers.isEmpty {
+            ContentUnavailableView(
+              "No matching papers", systemImage: "magnifyingglass",
+              description: Text("Try another paper title or clear the search."))
           }
         }
       }
@@ -93,6 +140,11 @@ struct PaperLibraryView: View {
         .id(selectedPaper.id)
       } else {
         ContentUnavailableView("Select a paper", systemImage: "sidebar.left")
+      }
+    }
+    .sheet(item: $paperEditingTags) { paper in
+      PaperTagsEditor(paper: paper) { tags in
+        try controller.setTags(tags, paperID: paper.id)
       }
     }
     .dropDestination(for: URL.self) { urls, _ in
