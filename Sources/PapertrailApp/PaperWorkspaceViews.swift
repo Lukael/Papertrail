@@ -970,6 +970,7 @@ private struct ChatQuestionRail: View {
   let questions: [ChatMessageRecord]
   let activeQuestionID: UUID?
   let onSelect: (UUID) -> Void
+  @State private var hoveredQuestionID: UUID?
 
   private var activeIndex: Int {
     questions.firstIndex(where: { $0.id == activeQuestionID }) ?? max(questions.count - 1, 0)
@@ -977,13 +978,15 @@ private struct ChatQuestionRail: View {
 
   var body: some View {
     VStack(spacing: 5) {
-      Button("Previous question", systemImage: "chevron.up") {
+      Button {
         onSelect(questions[max(activeIndex - 1, 0)].id)
+      } label: {
+        Label("Previous question", systemImage: "chevron.up")
+          .labelStyle(.iconOnly)
+          .frame(width: 36, height: 32)
+          .contentShape(Rectangle())
       }
-      .labelStyle(.iconOnly)
       .buttonStyle(.plain)
-      .frame(width: 28, height: 28)
-      .contentShape(Rectangle())
       .background(Color.primary.opacity(0.07), in: Circle())
       .disabled(activeIndex == 0)
       .help("Previous question")
@@ -1002,6 +1005,11 @@ private struct ChatQuestionRail: View {
                   number: index + 1,
                   total: questions.count,
                   isActive: question.id == activeQuestionID,
+                  isHovered: question.id == hoveredQuestionID,
+                  onHover: { hovering in
+                    if hovering { hoveredQuestionID = question.id }
+                    else if hoveredQuestionID == question.id { hoveredQuestionID = nil }
+                  },
                   onSelect: { onSelect(question.id) })
                   .id(question.id)
               }
@@ -1015,15 +1023,17 @@ private struct ChatQuestionRail: View {
         }
       }
       // Size the whole track so both the scroll view and capsule stay compact.
-      .frame(width: 36, height: min(CGFloat(questions.count * 14 + 8), 320))
+      .frame(width: 36, height: min(CGFloat(questions.count * 24 + 8), 320))
 
-      Button("Next question", systemImage: "chevron.down") {
+      Button {
         onSelect(questions[min(activeIndex + 1, questions.count - 1)].id)
+      } label: {
+        Label("Next question", systemImage: "chevron.down")
+          .labelStyle(.iconOnly)
+          .frame(width: 36, height: 32)
+          .contentShape(Rectangle())
       }
-      .labelStyle(.iconOnly)
       .buttonStyle(.plain)
-      .frame(width: 28, height: 28)
-      .contentShape(Rectangle())
       .background(Color.primary.opacity(0.07), in: Circle())
       .disabled(activeIndex >= questions.count - 1)
       .help("Next question")
@@ -1036,6 +1046,25 @@ private struct ChatQuestionRail: View {
         .stroke(Color.primary.opacity(0.10), lineWidth: 1)
     }
     .shadow(color: .black.opacity(0.10), radius: 8, y: 2)
+    // Keep the preview outside the marker ScrollView so its bounds cannot clip it.
+    .overlay(alignment: .trailing) {
+      if let index = questions.firstIndex(where: { $0.id == hoveredQuestionID }) {
+        HStack(spacing: 7) {
+          Text("\(index + 1)").monospacedDigit().foregroundStyle(Color.accentColor)
+          Text(questions[index].draft ?? questions[index].content)
+            .lineLimit(2)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .font(.caption)
+        .padding(10)
+        .frame(width: 240)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
+        .overlay { RoundedRectangle(cornerRadius: 10).stroke(Color.primary.opacity(0.1)) }
+        .offset(x: -46)
+        .allowsHitTesting(false)
+        .accessibilityLabel("Question preview")
+      }
+    }
     .zIndex(2)
     .accessibilityElement(children: .contain)
     .accessibilityLabel("Question navigation, question \(activeIndex + 1) of \(questions.count)")
@@ -1047,9 +1076,9 @@ private struct ChatQuestionRailMarker: View {
   let number: Int
   let total: Int
   let isActive: Bool
+  let isHovered: Bool
+  let onHover: (Bool) -> Void
   let onSelect: () -> Void
-  @Environment(\.accessibilityReduceMotion) private var reduceMotion
-  @State private var isHovered = false
 
   private var content: String { question.draft ?? question.content }
 
@@ -1058,41 +1087,11 @@ private struct ChatQuestionRailMarker: View {
       Capsule(style: .continuous)
         .fill(isActive || isHovered ? Color.accentColor : Color.secondary.opacity(0.52))
         .frame(width: isActive || isHovered ? 8 : 4, height: 6)
-        .frame(width: 36, height: 14)
+        .frame(width: 36, height: 24)
+        .contentShape(Rectangle())
     }
     .buttonStyle(.plain)
-    .frame(width: 36, height: 14)
-    .contentShape(Rectangle())
-    .onHover { isHovered = $0 }
-    .overlay(alignment: .trailing) {
-      if isHovered {
-        HStack(spacing: 7) {
-          Text("\(number)")
-            .font(.caption2.weight(.bold))
-            .monospacedDigit()
-            .foregroundStyle(Color.accentColor)
-          Text(content)
-            .font(.caption)
-            .lineLimit(1)
-            .truncationMode(.tail)
-            .frame(maxWidth: .infinity, alignment: .leading)
-        }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 7)
-        .frame(width: 260)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-        .overlay {
-          RoundedRectangle(cornerRadius: 10, style: .continuous)
-            .stroke(Color.primary.opacity(0.10), lineWidth: 1)
-        }
-        .shadow(color: .black.opacity(0.14), radius: 10, y: 3)
-        .offset(x: -28)
-        .allowsHitTesting(false)
-        .transition(.opacity.combined(with: .scale(scale: 0.97, anchor: .trailing)))
-      }
-    }
-    .zIndex(isHovered ? 1 : 0)
-    .animation(reduceMotion ? nil : .easeOut(duration: 0.14), value: isHovered)
+    .onHover(perform: onHover)
     .accessibilityLabel("Question \(number) of \(total): \(content)")
     .accessibilityAddTraits(isActive ? .isSelected : [])
   }
