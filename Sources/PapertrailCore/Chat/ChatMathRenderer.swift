@@ -91,14 +91,51 @@ public final class ChatMathRenderer {
   }
 
   public func html(for text: String) -> String {
-    let body = ChatMathContent.segments(in: text).map { segment in
-      switch segment {
+    let body = ChatMarkdownTable.blocks(in: text).map { block in
+      switch block {
       case .text(let value):
-        return "<span class=\"text\">\(Self.escapeHTML(value))</span>"
-      case .math(let source, let display):
-        return render(source: source, display: display)
+        return ChatMarkdownRenderer.htmlFragment(for: value) { source, display in
+          self.render(source: source, display: display)
+        }
+      case .table(let table):
+        return render(table: table)
       }
     }.joined()
+
+    return document(body: body)
+  }
+
+  private func render(table: ChatMarkdownTable.Table) -> String {
+    func cell(_ value: String, header: Bool, alignment: ChatMarkdownTable.Alignment) -> String {
+      let tag = header ? "th" : "td"
+      let cssAlignment: String
+      switch alignment {
+      case .leading: cssAlignment = "left"
+      case .center: cssAlignment = "center"
+      case .trailing: cssAlignment = "right"
+      }
+      return "<\(tag) style=\"text-align:\(cssAlignment)\">\(renderTableCell(value))</\(tag)>"
+    }
+
+    let header = zip(table.headers, table.alignments).map {
+      cell($0.0, header: true, alignment: $0.1)
+    }.joined()
+    let rows = table.rows.map { row in
+      let columns = zip(row, table.alignments).map {
+        cell($0.0, header: false, alignment: $0.1)
+      }.joined()
+      return "<tr>\(columns)</tr>"
+    }.joined()
+    return "<div class=\"table-scroll\"><table><thead><tr>\(header)</tr></thead><tbody>\(rows)</tbody></table></div>"
+  }
+
+  private func renderTableCell(_ value: String) -> String {
+    ChatMarkdownRenderer.inlineHTML(for: value) { source, display in
+      self.render(source: source, display: display)
+    }
+  }
+
+  private func document(body: String) -> String {
 
     return """
       <!doctype html>
@@ -111,11 +148,28 @@ public final class ChatMathRenderer {
       :root { color-scheme: light dark; font: 13px -apple-system, BlinkMacSystemFont, system-ui, sans-serif; }
       /* Keep the document viewport fixed; #content retains its natural height for native sizing. */
       html, body { height: 100%; margin: 0; padding: 0; background: transparent; color: CanvasText; overflow: clip; }
-      #content { overflow-wrap: anywhere; }
+      #content { display: flow-root; overflow-wrap: anywhere; }
       .text { white-space: pre-wrap; }
+      p { margin: 0.45em 0; }
+      h1, h2, h3, h4, h5, h6 { line-height: 1.25; margin: 0.65em 0 0.3em; }
+      h1 { font-size: 1.55em; } h2 { font-size: 1.4em; } h3 { font-size: 1.25em; }
+      h4 { font-size: 1.12em; } h5 { font-size: 1em; } h6 { font-size: 0.92em; }
+      ul, ol { margin: 0.35em 0; padding-left: 1.75em; }
+      li > p { margin: 0.15em 0; }
+      blockquote { margin: 0.45em 0; padding: 0.05em 0.75em; border-left: 3px solid color-mix(in srgb, CanvasText 25%, transparent); color: color-mix(in srgb, CanvasText 78%, transparent); }
+      code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.92em; background: color-mix(in srgb, CanvasText 8%, transparent); border-radius: 4px; padding: 0.08em 0.25em; }
+      pre { max-width: 100%; overflow-x: auto; overflow-y: hidden; margin: 0.5em 0; padding: 0.65em 0.75em; background: color-mix(in srgb, CanvasText 8%, transparent); border-radius: 6px; white-space: pre; }
+      pre code { background: transparent; padding: 0; }
+      a { color: LinkText; text-decoration: underline; }
+      .image-alt { font-style: italic; }
+      hr { border: 0; border-top: 1px solid color-mix(in srgb, CanvasText 22%, transparent); margin: 0.75em 0; }
       .math-inline { display: inline; white-space: normal; }
       .math-display { display: block; overflow-x: auto; overflow-y: hidden; padding: 0.2em 0; white-space: normal; }
       .math-unsupported { white-space: pre-wrap; text-decoration: underline dotted; text-decoration-color: #cc7a00; }
+      .table-scroll { width: 100%; overflow-x: auto; overflow-y: hidden; margin: 0.35em 0; }
+      table { border-collapse: collapse; min-width: 100%; width: max-content; }
+      th, td { border: 1px solid color-mix(in srgb, CanvasText 22%, transparent); min-width: 5em; max-width: 24em; padding: 0.4em 0.55em; vertical-align: top; white-space: normal; }
+      th { background: color-mix(in srgb, CanvasText 7%, transparent); font-weight: 600; }
       math { font-size: 1.05em; }
       </style>
       </head>

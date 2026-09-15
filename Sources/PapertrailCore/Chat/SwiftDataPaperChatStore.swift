@@ -50,7 +50,9 @@
 
     public func messages(paperID: UUID) throws -> [ChatMessageRecord] {
       try read { context in
-        try context.fetch(FetchDescriptor<ChatMessage>()).filter { $0.paperID == paperID }
+        try context.fetch(FetchDescriptor<ChatMessage>(
+          predicate: #Predicate { $0.paperID == paperID },
+          sortBy: [SortDescriptor(\.createdAt)]))
           .sorted { $0.createdAt == $1.createdAt ? $0.id.uuidString < $1.id.uuidString : $0.createdAt < $1.createdAt }
           .map(Self.record)
       }

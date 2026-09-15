@@ -6,18 +6,15 @@ import SwiftUI
   import SwiftData
 #endif
 
-struct PaperListItem: Identifiable, Hashable, Sendable {
-  let id: UUID
-  let title: String
-  let sourceRelativePath: String
-  let sourceSHA256: String
-  let pageIndex: Int
-  let scale: Double
-}
-
 @MainActor
 final class PaperLibraryController: ObservableObject {
   @Published private(set) var papers: [PaperListItem] = []
+  @Published var sortOrder = PaperSortOrder.load() {
+    didSet {
+      sortOrder.save()
+      papers = PaperListSorter.sort(papers, by: sortOrder)
+    }
+  }
   @Published var notice: String?
   let activityLog = AppActivityLog()
   @Published var codexModel = CodexModelSelection.load() {
@@ -44,6 +41,8 @@ final class PaperLibraryController: ObservableObject {
   private var reviewControllers: [UUID: ReviewGenerationController] = [:]
   private var chatControllers: [UUID: PaperChatController] = [:]
   private var supplementaryMerges: Set<UUID> = []
+  private var tagsByPaper: [UUID: [String]] = [:]
+  private var latestUserChatByPaper: [UUID: Date] = [:]
 
   #if PPR_PORTABLE_SCHEMA
     private let store: DurableModelStore
@@ -52,7 +51,7 @@ final class PaperLibraryController: ObservableObject {
     init(paths: LibraryPaths) {
       self.paths = paths
       self.store = DurableModelStore(storeURL: paths.storeURL)
-      reload()
+      reload(refreshChatActivity: true)
       activityLog.append(level: .success, "Paper library opened with \(papers.count) paper(s).")
     }
   #else
@@ -62,7 +61,7 @@ final class PaperLibraryController: ObservableObject {
     init(paths: LibraryPaths, container: ModelContainer) {
       self.paths = paths
       self.container = container
-      reload()
+      reload(refreshChatActivity: true)
       activityLog.append(level: .success, "Paper library opened with \(papers.count) paper(s).")
     }
   #endif
@@ -150,6 +149,9 @@ final class PaperLibraryController: ObservableObject {
         reasoningEffort: codexEffort, activityLog: activityLog,
         executableProvider: codexExecutableProvider)
     #endif
+    controller.onUserMessage = { [weak self] date in
+      self?.noteChatActivity(paperID: paperID, at: date)
+    }
     chatControllers[paperID] = controller
     return controller
   }
@@ -280,6 +282,24 @@ final class PaperLibraryController: ObservableObject {
     }
   }
 
+  func setTags(_ tags: [String], paperID: UUID) throws {
+    guard let index = papers.firstIndex(where: { $0.id == paperID }) else {
+      throw PaperLibraryOperationError.paperNotFound
+    }
+    let saved = try PaperTagStore(paths: paths).save(tags, paperID: paperID)
+    tagsByPaper[paperID] = saved
+    papers[index].tags = saved
+  }
+
+  func noteChatActivity(paperID: UUID, at date: Date = Date()) {
+    guard let index = papers.firstIndex(where: { $0.id == paperID }) else { return }
+    latestUserChatByPaper[paperID] = max(latestUserChatByPaper[paperID] ?? .distantPast, date)
+    papers[index] = papers[index].notingChatActivity(at: date)
+    if sortOrder == .recentChat {
+      papers = PaperListSorter.sort(papers, by: sortOrder)
+    }
+  }
+
   func deletePaper(paperID: UUID) async -> Bool {
     activityLog.append(level: .warning, "Paper deletion requested: \(paperID.uuidString)")
     let reviewController = reviewControllers[paperID]
@@ -307,6 +327,7 @@ final class PaperLibraryController: ObservableObject {
       #endif
       reviewControllers[paperID] = nil
       chatControllers[paperID] = nil
+      tagsByPaper[paperID] = nil
       reload()
       guard !receipt.fileCleanupPending else {
         notice =
@@ -329,23 +350,53 @@ final class PaperLibraryController: ObservableObject {
     }
   }
 
-  private func reload() {
+  private func reload(refreshChatActivity: Bool = false) {
     do {
       #if PPR_PORTABLE_SCHEMA
-        let records = try store.read { $0.papers }
+        let records = try store.read { snapshot in
+          if refreshChatActivity {
+            var latest: [UUID: Date] = [:]
+            for message in snapshot.messages where message.roleRawValue == "user" {
+              latest[message.paperID] = max(
+                latest[message.paperID] ?? .distantPast, message.createdAt)
+            }
+            latestUserChatByPaper = latest
+          }
+          return snapshot.papers
+        }
       #else
         let context = ModelContext(container)
         let records = try context.fetch(FetchDescriptor<Paper>())
+        if refreshChatActivity {
+          var messageDescriptor = FetchDescriptor<ChatMessage>(
+            predicate: #Predicate { $0.roleRawValue == "user" },
+            sortBy: [SortDescriptor(\ChatMessage.createdAt, order: .reverse)])
+          messageDescriptor.propertiesToFetch = [\ChatMessage.paperID, \ChatMessage.createdAt]
+          let userMessages = try context.fetch(messageDescriptor)
+          var latest: [UUID: Date] = [:]
+          for message in userMessages where latest[message.paperID] == nil {
+            latest[message.paperID] = message.createdAt
+          }
+          latestUserChatByPaper = latest
+        }
       #endif
+      // Cache small sidecars so PDF reading-state updates do not reread tag files.
+      for record in records where tagsByPaper[record.id] == nil {
+        do {
+          tagsByPaper[record.id] = try PaperTagStore(paths: paths).load(paperID: record.id)
+        } catch {
+          notice = "Tags could not be loaded: \(error.localizedDescription)"
+          activityLog.append(level: .error, notice ?? "Tag load failed.")
+        }
+      }
       papers = records.map {
         PaperListItem(
           id: $0.id, title: $0.canonicalTitle, sourceRelativePath: $0.sourceRelativePath,
           sourceSHA256: $0.sourceSHA256, pageIndex: $0.readingPageIndex,
-          scale: $0.readingScale)
-      }.sorted {
-        if $0.title == $1.title { return $0.id.uuidString < $1.id.uuidString }
-        return $0.title.localizedStandardCompare($1.title) == .orderedAscending
+          scale: $0.readingScale, createdAt: $0.createdAt,
+          lastChatAt: latestUserChatByPaper[$0.id], tags: tagsByPaper[$0.id] ?? [])
       }
+      papers = PaperListSorter.sort(papers, by: sortOrder)
     } catch {
       notice = "The paper library could not be loaded: \(error.localizedDescription)"
       activityLog.append(level: .error, notice ?? "Paper library load failed.")

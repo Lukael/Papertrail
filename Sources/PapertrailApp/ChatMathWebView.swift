@@ -118,6 +118,15 @@ struct ChatMathWebView: NSViewRepresentable {
       _ webView: WKWebView, decidePolicyFor action: WKNavigationAction,
       decisionHandler: @escaping @MainActor @Sendable (WKNavigationActionPolicy) -> Void
     ) {
+      if action.navigationType == .linkActivated,
+        let url = action.request.url,
+        let scheme = url.scheme?.lowercased(),
+        ["https", "http", "mailto"].contains(scheme)
+      {
+        NSWorkspace.shared.open(url)
+        decisionHandler(.cancel)
+        return
+      }
       let initialDocument = action.navigationType == .other
         && action.request.url?.absoluteString == "about:blank"
         && action.targetFrame?.isMainFrame == true
