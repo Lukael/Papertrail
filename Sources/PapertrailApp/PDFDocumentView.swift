@@ -32,6 +32,7 @@ private struct PDFViewRepresentable: NSViewRepresentable {
     view.displayMode = .singlePageContinuous
     view.displayDirection = .vertical
     view.displaysPageBreaks = true
+    view.pageShadowsEnabled = false
     view.autoScales = false
     view.minScaleFactor = 0.1
     view.maxScaleFactor = 16
