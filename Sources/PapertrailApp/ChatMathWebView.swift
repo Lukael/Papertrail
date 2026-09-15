@@ -6,6 +6,7 @@ import WebKit
 struct ChatMathWebView: NSViewRepresentable {
   let html: String
   let sourceText: String
+  var fontSize: CGFloat = 13
   let onHeightChanged: (CGFloat) -> Void
 
   func makeCoordinator() -> Coordinator { Coordinator(onHeightChanged: onHeightChanged) }
@@ -30,7 +31,12 @@ struct ChatMathWebView: NSViewRepresentable {
     let view = container.webView
     view.sourceText = sourceText
     context.coordinator.onHeightChanged = onHeightChanged
-    guard context.coordinator.html != html else { return }
+    let sizeChanged = context.coordinator.fontSize != fontSize
+    context.coordinator.fontSize = fontSize
+    guard context.coordinator.html != html else {
+      if sizeChanged { context.coordinator.measure(view) }
+      return
+    }
     context.coordinator.html = html
     context.coordinator.loaded = false
     view.loadHTMLString(html, baseURL: nil)
@@ -90,6 +96,7 @@ struct ChatMathWebView: NSViewRepresentable {
   @MainActor final class Coordinator: NSObject, WKNavigationDelegate {
     var html = ""
     var loaded = false
+    var fontSize: CGFloat = 13
     var onHeightChanged: (CGFloat) -> Void
 
     init(onHeightChanged: @escaping (CGFloat) -> Void) {
@@ -104,10 +111,11 @@ struct ChatMathWebView: NSViewRepresentable {
     func measure(_ webView: WKWebView) {
       guard loaded, webView.bounds.width > 0 else { return }
       let currentHTML = html
+      let currentFontSize = fontSize
       // App-owned DOM measurement; page JavaScript remains disabled.
-      webView.evaluateJavaScript("Math.ceil(document.getElementById('content').getBoundingClientRect().height)") {
+      webView.evaluateJavaScript("document.documentElement.style.fontSize = '\(currentFontSize)px'; Math.ceil(document.getElementById('content').getBoundingClientRect().height)") {
         [weak self] result, _ in
-        guard let self, self.html == currentHTML,
+        guard let self, self.html == currentHTML, self.fontSize == currentFontSize,
           let number = result as? NSNumber, number.doubleValue.isFinite
         else { return }
         self.onHeightChanged(max(24, CGFloat(number.doubleValue) + 2))

@@ -81,6 +81,8 @@
 
 - Supported breakpoints/devices: macOS 14+ with a resizable native split workspace.
 - Layout adaptations: Paper and Review visibility toggles never permit an empty source area. When both are enabled, they share the source area through a nested resizable split; the source area and Chat preserve minimum readable widths.
+- Chat messages, user bubbles, and the composer fill the available chat pane width with consistent padding. Do not cap them at a fixed reading width when the pane grows.
+- The chat header provides A− / percentage / A+ text controls from 80% to 200% in 10% steps. Clicking the percentage resets to 100%. Persist the setting across papers and launches; scale plain text, Markdown, tables, code and math together without scaling toolbar or timestamp labels.
 - Touch/hover differences: the trailing question rail stays compact at rest and reveals a one-line, tail-truncated question preview to its left on pointer hover.
 
 ## Interaction states
@@ -141,3 +143,5 @@
 - Use full-opacity difference blending: white becomes pure black, black becomes white. The current transform also inverts image colors.
 - Disable PDF page border shadows in both light and dark mode.
 - In dark mode, outline all four edges of every page with a thin white border, including the final page; match the actual page bounds during scrolling and zooming.
+
+- Chat reading rhythm: body line height 1.6, headings 1.3, code blocks and tables 1.4; Markdown paragraph margins 0.8em. Native plain text adds spacing to match the body line height. These values follow the selected text size.
