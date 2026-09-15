@@ -122,8 +122,9 @@ struct ChatLiveAssistantState { var reasoning: String?; var response: String? }
             deliveryState: "committed", createdAt: Date())
         }
         var measured = CGSize.zero
+        var selectedID: UUID?
         let rail = ChatQuestionRail(questions: questions, activeQuestionID: questions.last?.id,
-          onSelect: { _ in })
+          onSelect: { selectedID = $0 })
           .background(GeometryReader { geometry in
             Color.clear.onAppear { measured = geometry.size }
               .onChange(of: geometry.size) { measured = geometry.size }
@@ -136,15 +137,25 @@ struct ChatLiveAssistantState { var reasoning: String?; var response: String? }
         window.orderFront(nil)
         hosting.layoutSubtreeIfNeeded()
         RunLoop.current.run(until: Date().addingTimeInterval(0.1))
-        let expectedHeight = min(CGFloat(count * 14 + 8), 320) + 78
+        let expectedHeight = min(CGFloat(count * 24 + 8), 320) + 86
         precondition(abs(measured.width - 46) < 1,
           "Question rail covers transcript: width \(measured.width), expected 46")
         precondition(abs(measured.height - expectedHeight) < 1,
           "Question rail stretches vertically: height \(measured.height), expected \(expectedHeight)")
+        if count == 1 {
+          // Click empty label space, well outside the narrow visible capsule.
+          for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
+            window.sendEvent(NSEvent.mouseEvent(with: type,
+              location: NSPoint(x: width - 8, y: 300), modifierFlags: [],
+              timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
+              context: nil, eventNumber: 0, clickCount: 1, pressure: 1)!)
+          }
+          precondition(selectedID == questions[0].id, "Question marker margin must be clickable")
+        }
         window.orderOut(nil)
       }
     }
-    print("PASS: question rail remains 46pt wide with content-sized height in 6 native layouts")
+    print("PASS: question rail stays compact in 6 native layouts; marker margins are clickable")
   }
 
 }
