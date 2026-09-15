@@ -755,8 +755,7 @@ private struct PaperChatView: View {
                   }
                 }
             }
-            .frame(maxWidth: 780)
-            .frame(maxWidth: .infinity, alignment: .center)
+            .frame(maxWidth: .infinity, alignment: .leading)
             .padding()
             .background(ChatScrollBoundaryView())
           }
@@ -870,7 +869,7 @@ private struct PaperChatView: View {
 
   private var chatComposerPanel: some View {
     chatComposer
-    .frame(maxWidth: 780)
+    .frame(maxWidth: .infinity)
     .padding(.horizontal, 14)
     .padding(.top, 10)
     // NavigationSplitView does not propagate the library-level bottom inset into
@@ -1158,7 +1157,7 @@ private struct ChatMessageRow: View {
     }
     .padding(.horizontal, 14)
     .padding(.vertical, 10)
-    .frame(maxWidth: 560, alignment: .leading)
+    .frame(maxWidth: .infinity, alignment: .leading)
     .background(Color.accentColor.opacity(0.16))
     .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
     .overlay {
