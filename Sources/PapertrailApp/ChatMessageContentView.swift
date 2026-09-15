@@ -2,7 +2,7 @@ import AppKit
 import PapertrailCore
 import SwiftUI
 
-/// Keeps persisted messages untouched; only their presentation interprets math delimiters.
+/// Keeps persisted messages untouched while presenting Markdown and math.
 struct ChatMessageContentView: View {
   let text: String
   @State private var html: String?
@@ -30,7 +30,7 @@ struct ChatMessageContentView: View {
           }
       }
       if let renderingError {
-        Text("Math rendering unavailable")
+        Text("Message formatting unavailable")
           .font(.caption)
           .foregroundStyle(.secondary)
           .help(renderingError)
@@ -41,7 +41,7 @@ struct ChatMessageContentView: View {
         if case .math = $0 { return true }
         return false
       }
-      guard hasMath else {
+      guard hasMath || ChatMarkdownRenderer.requiresHTML(in: text) else {
         html = nil
         renderingError = nil
         return

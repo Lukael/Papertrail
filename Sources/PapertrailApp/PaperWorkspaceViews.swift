@@ -31,6 +31,8 @@ struct PaperLibraryView: View {
   @State private var paperPendingRename: PaperListItem?
   @State private var editedPaperTitle = ""
   @State private var showsAppInformation = false
+  @State private var titleQuery = ""
+  @State private var paperEditingTags: PaperListItem?
 
   #if PPR_PORTABLE_SCHEMA
     init(paths: LibraryPaths, launchRepairMessage: String?) {
@@ -49,32 +51,85 @@ struct PaperLibraryView: View {
     controller.papers.first(where: { $0.id == selectedPaperID })
   }
 
+  private var matchingPapers: [PaperListItem] {
+    PaperListFilter.matching(controller.papers, title: titleQuery)
+  }
+
   var body: some View {
     NavigationSplitView {
-      List(controller.papers, selection: $selectedPaperID) { paper in
-        Text(paper.title).tag(paper.id)
-          .contextMenu {
-            Button("Rename…", systemImage: "pencil") {
-              editedPaperTitle = paper.title
-              paperPendingRename = paper
+      VStack(spacing: 0) {
+        HStack(spacing: 6) {
+          Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+          TextField("Search paper titles", text: $titleQuery)
+            .textFieldStyle(.plain)
+            .accessibilityLabel("Search paper titles")
+          if !titleQuery.isEmpty {
+            Button { titleQuery = "" } label: {
+              Image(systemName: "xmark.circle.fill")
             }
-            Button("Add Supplementary PDF…", systemImage: "doc.badge.plus") {
-              pdfSelectionPurpose = .supplementary(paper)
-              isPDFImporterPresented = true
-            }
-            Button("Delete Paper…", systemImage: "trash", role: .destructive) {
-              paperPendingDeletion = paper
-            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Clear search")
           }
-      }
-      .navigationTitle("Papers")
-      .overlay {
-        if controller.papers.isEmpty {
-          ContentUnavailableView(
-            "No papers", systemImage: "doc.richtext",
-            description: Text("Import a local PDF or drop one into this window."))
+        }
+        .padding(8)
+        .background(.quaternary, in: RoundedRectangle(cornerRadius: 8))
+        .padding(.horizontal, 10)
+        .padding(.top, 10)
+        Picker("Sort papers", selection: $controller.sortOrder) {
+          ForEach(PaperSortOrder.allCases, id: \.self) { order in
+            Text(order.title).tag(order)
+          }
+        }
+        .padding(10)
+        List(matchingPapers, selection: $selectedPaperID) { paper in
+          HStack(alignment: .top, spacing: 8) {
+            VStack(alignment: .leading, spacing: 5) {
+              Text(paper.title)
+              if !paper.tags.isEmpty {
+                Text(paper.tags.map { "#\($0)" }.joined(separator: "  "))
+                  .font(.caption)
+                  .foregroundStyle(.secondary)
+                  .lineLimit(2)
+                  .help(paper.tags.joined(separator: ", "))
+              }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            Button { paperEditingTags = paper } label: {
+              Image(systemName: "tag")
+            }
+            .buttonStyle(.borderless)
+            .help("Edit tags")
+            .accessibilityLabel("Edit tags for \(paper.title)")
+          }
+          .tag(paper.id)
+            .contextMenu {
+              Button("Edit Tags…", systemImage: "tag") { paperEditingTags = paper }
+              Button("Rename…", systemImage: "pencil") {
+                editedPaperTitle = paper.title
+                paperPendingRename = paper
+              }
+              Button("Add Supplementary PDF…", systemImage: "doc.badge.plus") {
+                pdfSelectionPurpose = .supplementary(paper)
+                isPDFImporterPresented = true
+              }
+              Button("Delete Paper…", systemImage: "trash", role: .destructive) {
+                paperPendingDeletion = paper
+              }
+            }
+        }
+        .overlay {
+          if controller.papers.isEmpty {
+            ContentUnavailableView(
+              "No papers", systemImage: "doc.richtext",
+              description: Text("Import a local PDF or drop one into this window."))
+          } else if matchingPapers.isEmpty {
+            ContentUnavailableView(
+              "No matching papers", systemImage: "magnifyingglass",
+              description: Text("Try another paper title or clear the search."))
+          }
         }
       }
+      .navigationTitle("Papers")
     } detail: {
       if let selectedPaper {
         PaperWorkspaceView(
@@ -85,6 +140,11 @@ struct PaperLibraryView: View {
         .id(selectedPaper.id)
       } else {
         ContentUnavailableView("Select a paper", systemImage: "sidebar.left")
+      }
+    }
+    .sheet(item: $paperEditingTags) { paper in
+      PaperTagsEditor(paper: paper) { tags in
+        try controller.setTags(tags, paperID: paper.id)
       }
     }
     .dropDestination(for: URL.self) { urls, _ in
@@ -395,6 +455,7 @@ struct PaperWorkspaceView: View {
   @ObservedObject var chatController: PaperChatController
   @State private var showsPaper = true
   @State private var showsReview = false
+  @AppStorage("pdfDarkMode") private var pdfDarkMode = false
 
   private var chatView: some View {
     PaperChatView(controller: chatController)
@@ -443,6 +504,14 @@ struct PaperWorkspaceView: View {
       .toggleStyle(.button)
       .accessibilityHint("Show or hide the review pane. At least one source pane stays visible.")
       Spacer()
+      if showsPaper {
+        Toggle(isOn: $pdfDarkMode) {
+          Label("Dark PDF", systemImage: "moon.fill")
+        }
+        .toggleStyle(.button)
+        .help("Turn PDF dark mode on or off")
+        .accessibilityLabel("PDF dark mode")
+      }
     }
     .padding(.horizontal, 14).padding(.vertical, 10)
     .background(.bar)
@@ -486,7 +555,7 @@ struct PaperWorkspaceView: View {
   @ViewBuilder private var paperPane: some View {
     if let url = try? controller.sourceURL(for: paper) {
       PDFDocumentView(
-        url: url, pageIndex: paper.pageIndex, scale: paper.scale
+        url: url, pageIndex: paper.pageIndex, scale: paper.scale, isDarkMode: pdfDarkMode
       ) { page, scale in
         controller.updateReadingState(paperID: paper.id, pageIndex: page, scale: scale)
       }
@@ -604,11 +673,14 @@ private struct PaperChatView: View {
   @State private var activeQuestionID: UUID?
   @State private var isTranscriptNearBottom = true
   @State private var transcriptMetrics = ChatTranscriptMetrics()
+  @State private var visibleMessageLimit = ChatTranscriptWindow.pageSize
 
   var body: some View {
     let questions = controller.messages.filter { $0.role == "user" }
     let questionNumbers = Dictionary(
       uniqueKeysWithValues: questions.enumerated().map { ($0.element.id, $0.offset + 1) })
+    let firstVisibleIndex = ChatTranscriptWindow.startIndex(
+      count: controller.messages.count, visibleLimit: visibleMessageLimit)
 
     return VStack(alignment: .leading, spacing: 0) {
       HStack {
@@ -627,7 +699,19 @@ private struct PaperChatView: View {
           ScrollView {
             // Keep native math views mounted: lazy recycling can leave WebKit blank.
             VStack(alignment: .leading, spacing: 18) {
-              if controller.messages.isEmpty {
+              if firstVisibleIndex > 0 {
+                Button("Load earlier messages (\(firstVisibleIndex))") {
+                  let anchor = controller.messages[firstVisibleIndex].id
+                  isTranscriptNearBottom = false
+                  visibleMessageLimit += ChatTranscriptWindow.pageSize
+                  DispatchQueue.main.async { proxy.scrollTo(anchor, anchor: .top) }
+                }
+                .frame(maxWidth: .infinity)
+              }
+              if controller.isLoading && controller.messages.isEmpty {
+                ProgressView("Loading conversation…")
+                  .frame(maxWidth: .infinity, minHeight: 240)
+              } else if controller.messages.isEmpty {
                 ContentUnavailableView {
                   Label("Start a conversation", systemImage: "bubble.left.and.bubble.right")
                 } description: {
@@ -635,7 +719,7 @@ private struct PaperChatView: View {
                 }
                 .frame(maxWidth: .infinity, minHeight: 240)
               }
-              ForEach(controller.messages) { message in
+              ForEach(controller.messages.suffix(from: firstVisibleIndex)) { message in
                 ChatMessageRow(
                   message: message,
                   questionNumber: questionNumbers[message.id],
@@ -706,14 +790,25 @@ private struct PaperChatView: View {
               onSelect: { questionID in
                 activeQuestionID = questionID
                 isTranscriptNearBottom = false
-                scroll(proxy, to: questionID, anchor: .top)
+                if let index = controller.messages.firstIndex(where: { $0.id == questionID }),
+                  index < firstVisibleIndex
+                {
+                  visibleMessageLimit = ChatTranscriptWindow.limitRevealing(
+                    index: index, count: controller.messages.count,
+                    currentLimit: visibleMessageLimit)
+                  DispatchQueue.main.async { scroll(proxy, to: questionID, anchor: .top) }
+                } else {
+                  scroll(proxy, to: questionID, anchor: .top)
+                }
               }
             )
             .padding(.trailing, 10)
             .padding(.vertical, 14)
           }
         }
-        .onChange(of: controller.messages.count) {
+        .onChange(of: controller.messages.count) { oldCount, newCount in
+          visibleMessageLimit = ChatTranscriptWindow.adjustedLimit(
+            visibleMessageLimit, oldCount: oldCount, newCount: newCount)
           if let last = controller.messages.last {
             if last.role == "user" {
               activeQuestionID = last.id
@@ -882,18 +977,29 @@ private struct ChatQuestionRail: View {
           .fill(Color.primary.opacity(0.08))
           .frame(width: 6)
 
-        VStack(spacing: 0) {
-          ForEach(Array(questions.enumerated()), id: \.element.id) { index, question in
-            ChatQuestionRailMarker(
-              question: question,
-              number: index + 1,
-              total: questions.count,
-              isActive: question.id == activeQuestionID,
-              onSelect: { onSelect(question.id) })
+        ScrollViewReader { railProxy in
+          ScrollView {
+            LazyVStack(spacing: 0) {
+              ForEach(Array(questions.enumerated()), id: \.element.id) { index, question in
+                ChatQuestionRailMarker(
+                  question: question,
+                  number: index + 1,
+                  total: questions.count,
+                  isActive: question.id == activeQuestionID,
+                  onSelect: { onSelect(question.id) })
+                  .id(question.id)
+              }
+            }
+            .padding(.vertical, 4)
+          }
+          .scrollIndicators(.hidden)
+          .onChange(of: activeQuestionID) {
+            if let activeQuestionID { railProxy.scrollTo(activeQuestionID, anchor: .center) }
           }
         }
-        .padding(.vertical, 4)
       }
+      // Size the whole track so both the scroll view and capsule stay compact.
+      .frame(width: 36, height: min(CGFloat(questions.count * 14 + 8), 320))
 
       Button("Next question", systemImage: "chevron.down") {
         onSelect(questions[min(activeIndex + 1, questions.count - 1)].id)

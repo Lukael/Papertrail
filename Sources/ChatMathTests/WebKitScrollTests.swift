@@ -82,6 +82,33 @@ func testWebKitScrollIsolation() throws {
   }
 
   print("PASS WebKit root vertical scroll disabled and display math horizontal scroll preserved")
+
+  let header = "|" + (1...12).map { "Column \($0)" }.joined(separator: "|") + "|"
+  let separator = "|" + Array(repeating: "---", count: 12).joined(separator: "|") + "|"
+  let row = "|" + Array(repeating: "Measurement value", count: 12).joined(separator: "|") + "|"
+  let table = ([header, separator] + Array(repeating: row, count: 30)).joined(separator: "\n")
+  let tableMetrics = try scrollMetrics(for: renderer.html(for: table))
+  guard tableMetrics.displayScrollWidth > tableMetrics.displayClientWidth,
+    tableMetrics.displayScrollLeft > 0,
+    tableMetrics.rootScrollTop == 0,
+    tableMetrics.rootOverflowY == "clip",
+    tableMetrics.contentHeight > tableMetrics.windowInnerHeight
+  else {
+    throw TestFailure(description: "wide/tall Markdown table broke scroll isolation: \(tableMetrics)")
+  }
+  print("PASS WebKit Markdown table horizontal scrolling and full content height")
+
+  let code = String(repeating: "value += 1; ", count: 80)
+  let markdown = "### Heading\n\n> Quote\n\n- First\n- Second\n\n```swift\n\(code)\n```"
+  let codeMetrics = try scrollMetrics(for: renderer.html(for: markdown))
+  guard codeMetrics.displayScrollWidth > codeMetrics.displayClientWidth,
+    codeMetrics.displayScrollLeft > 0,
+    codeMetrics.rootScrollTop == 0,
+    codeMetrics.contentHeight > codeMetrics.windowInnerHeight
+  else {
+    throw TestFailure(description: "Markdown code block broke scroll isolation: \(codeMetrics)")
+  }
+  print("PASS WebKit formatted Markdown and horizontal code scrolling")
 }
 
 @MainActor
@@ -111,7 +138,7 @@ private func scrollMetrics(for html: String) throws -> ScrollMetrics {
   let script = """
     (() => {
       const root = document.scrollingElement;
-      const display = document.querySelector('.math-display');
+      const display = document.querySelector('.table-scroll, .math-display, pre');
       root.scrollTop = 60;
       display.scrollLeft = 60;
       return JSON.stringify({

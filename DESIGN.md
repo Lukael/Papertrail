@@ -27,7 +27,7 @@
 
 ## Information architecture
 
-- Primary navigation: native `NavigationSplitView` paper sidebar.
+- Primary navigation: native `NavigationSplitView` paper sidebar with a title search field and a persisted Name / Upload date / Recent chat picker. Upload and recent chat sort newest first; recent chat uses user message activity.
 - Core screens: import confirmation; paper workspace with independent Paper and Review visibility toggles plus persistent right Chat; sidebar rename dialog; destructive delete confirmation.
 - Content hierarchy: global toolbar controls and on-demand app information, resizable source area that shows Paper, Review, or both, persistent paper chat pane, persistent one-line activity log with expandable history.
 
@@ -65,7 +65,8 @@
 
 - Existing components to reuse: `PaperLibraryView`, `PaperWorkspaceView`, and `PDFDocumentView` from the reference implementation.
 - New/changed components: `ChatMessageRow` separates chat roles, marks question anchors, and shows persisted timestamps; `ChatQuestionRail` exposes translucent trailing-edge transcript navigation with hover previews; `ActivityLogBar` shows diagnostics; `PaperWorkspaceView` owns the resizable source/chat split and full-height review reader; the sidebar context menu owns rename, supplementary-PDF, and delete actions; the toolbar information panel contains storage and authority disclosures.
-- Variants and states: committed, draft, failed/retry, generating/cancel, empty conversation.
+- Tag editing: each sidebar row shows tags below its title and an accessible tag button. A native sheet supports staged add/remove, pending-input Save, Cancel, and inline persistence errors; the context menu exposes the same editor. Title search preserves the selected sort and has a clear action and no-results state.
+- Variants and states: committed, draft, failed/retry, generating/cancel, loading conversation, empty conversation. Long conversations initially show the latest 40 messages; Load earlier messages reveals another 40 while preserving the reading anchor. Selecting an older question reveals its history before navigation. The question rail is 46pt wide including padding; its entire marker track (background and scroll view together) uses content height capped at 320pt so it cannot expand over the transcript.
 - Token/component ownership: system semantic colors, materials, typography, and SF Symbols remain owned by SwiftUI.
 
 ## Accessibility
@@ -117,6 +118,26 @@
 - Keep dates, selection, and source copy available; resize math messages with the chat column and allow horizontal scrolling for long display equations.
 - Use bundled local KaTeX to produce static MathML; no remote fonts, CDN requests, or page scripts.
 
+## Chat tables
+
+- Render Markdown pipe tables in user and assistant messages, including messages without math, with header cells, row borders, and column alignment.
+- Preserve LaTeX within cells and retain the original source for copying. Code-fenced examples remain literal text.
+- Wide tables scroll horizontally inside the message; vertical scrolling remains owned by the transcript. Table rendering uses the existing local, script-free HTML view.
+
+## Chat Markdown
+
+- Format headings, paragraphs, emphasis, ordered/unordered lists, block quotes, inline/fenced code, separators, and links alongside tables and LaTeX.
+- Preserve literal syntax inside code and the original message for copying. Plain messages keep the lightweight native text path.
+- Open explicitly clicked web/email links with the system application; never load remote images or execute message HTML/scripts inside chat.
+
 ## Open questions
 
 - [ ] Pixel-level comparison screenshot baseline for the current host.
+
+## PDF appearance
+
+- Show a Dark PDF toggle at the trailing edge of the source toolbar while the PDF pane is visible. Default off; persist the preference across papers and launches.
+- Apply a display-only dark color transform to the native PDF view. Turning it off restores original colors without replacing the PDF document or changing page/zoom state.
+- Use full-opacity difference blending: white becomes pure black, black becomes white. The current transform also inverts image colors.
+- Disable PDF page border shadows in both light and dark mode.
+- In dark mode, outline all four edges of every page with a thin white border, including the final page; match the actual page bounds during scrolling and zooming.

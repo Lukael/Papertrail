@@ -1,15 +1,17 @@
 import PDFKit
 import SwiftUI
+import CoreImage
 
 struct PDFDocumentView: View {
   let url: URL
   let pageIndex: Int
   let scale: Double
+  var isDarkMode = false
   let onReadingStateChanged: (Int, Double) -> Void
 
   var body: some View {
     PDFViewRepresentable(
-      url: url, pageIndex: pageIndex, scale: scale,
+      url: url, pageIndex: pageIndex, scale: scale, isDarkMode: isDarkMode,
       onReadingStateChanged: onReadingStateChanged
     )
     .accessibilityLabel("Stored source PDF")
@@ -20,26 +22,30 @@ private struct PDFViewRepresentable: NSViewRepresentable {
   let url: URL
   let pageIndex: Int
   let scale: Double
+  let isDarkMode: Bool
   let onReadingStateChanged: (Int, Double) -> Void
 
   func makeCoordinator() -> Coordinator { Coordinator(onChange: onReadingStateChanged) }
 
   func makeNSView(context: Context) -> PDFView {
-    let view = PDFView()
+    let view = AppearancePDFView()
     view.displayMode = .singlePageContinuous
     view.displayDirection = .vertical
     view.displaysPageBreaks = true
+    view.pageShadowsEnabled = false
     view.autoScales = false
     view.minScaleFactor = 0.1
     view.maxScaleFactor = 16
     context.coordinator.attach(to: view)
     context.coordinator.apply(url: url, pageIndex: pageIndex, scale: scale, to: view)
+    context.coordinator.applyAppearance(isDarkMode: isDarkMode, to: view)
     return view
   }
 
   func updateNSView(_ view: PDFView, context: Context) {
     context.coordinator.onChange = onReadingStateChanged
     context.coordinator.apply(url: url, pageIndex: pageIndex, scale: scale, to: view)
+    context.coordinator.applyAppearance(isDarkMode: isDarkMode, to: view)
   }
 
   @MainActor
@@ -48,8 +54,19 @@ private struct PDFViewRepresentable: NSViewRepresentable {
     private weak var observedView: PDFView?
     private var loadedURL: URL?
     private var applyingState = false
+    private var appliedDarkMode: Bool?
+    private var originalBackgroundColor: NSColor?
 
     init(onChange: @escaping (Int, Double) -> Void) { self.onChange = onChange }
+
+    func applyAppearance(isDarkMode: Bool, to view: PDFView) {
+      guard appliedDarkMode != isDarkMode else { return }
+      appliedDarkMode = isDarkMode
+      view.wantsLayer = true
+      if originalBackgroundColor == nil { originalBackgroundColor = view.backgroundColor }
+      view.backgroundColor = isDarkMode ? .white : (originalBackgroundColor ?? .windowBackgroundColor)
+      (view as? AppearancePDFView)?.setDarkMode(isDarkMode)
+    }
 
     func attach(to view: PDFView) {
       observedView = view
@@ -93,6 +110,65 @@ private struct PDFViewRepresentable: NSViewRepresentable {
 
     deinit {
       NotificationCenter.default.removeObserver(self)
+    }
+  }
+}
+
+
+/// Blends above live PDFKit tiles instead of caching them through a content filter.
+private final class AppearancePDFView: PDFView {
+  private let tint = PDFTintView()
+
+  override func layout() {
+    super.layout()
+    tint.needsDisplay = true
+  }
+
+  func setDarkMode(_ enabled: Bool) {
+    if tint.superview == nil {
+      tint.wantsLayer = true
+      tint.pdfView = self
+      tint.compositingFilter = CIFilter(name: "CIDifferenceBlendMode")
+      tint.alphaValue = 1
+      tint.autoresizingMask = [.width, .height]
+      tint.frame = bounds
+      addSubview(tint, positioned: .above, relativeTo: nil)
+      NotificationCenter.default.addObserver(
+        self, selector: #selector(scrollBoundsChanged(_:)),
+        name: NSView.boundsDidChangeNotification, object: nil)
+    }
+    tint.isHidden = !enabled
+    tint.needsDisplay = true
+  }
+
+  @objc private func scrollBoundsChanged(_ notification: Notification) {
+    guard let clip = notification.object as? NSClipView, clip.isDescendant(of: self) else { return }
+    tint.needsDisplay = true
+  }
+
+  deinit {
+    NotificationCenter.default.removeObserver(self)
+  }
+}
+
+private final class PDFTintView: NSView {
+  weak var pdfView: PDFView?
+
+  override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+  override func draw(_ dirtyRect: NSRect) {
+    NSColor.white.setFill()
+    bounds.fill()
+    guard let pdfView else { return }
+    // Black in the difference overlay preserves the white page edge below it.
+    NSColor.black.setFill()
+    let thickness = 1 / (window?.backingScaleFactor ?? 1)
+    for page in pdfView.visiblePages {
+      let pageRect = convert(pdfView.convert(page.bounds(for: pdfView.displayBox), from: page), from: pdfView)
+      let outline = NSBezierPath(rect: pageRect.insetBy(dx: thickness / 2, dy: thickness / 2))
+      outline.lineWidth = thickness
+      NSColor.black.setStroke()
+      outline.stroke()
     }
   }
 }
