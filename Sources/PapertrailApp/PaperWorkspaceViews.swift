@@ -669,6 +669,7 @@ private struct ReviewHTMLPreview: View {
 
 private struct PaperChatView: View {
   @ObservedObject var controller: PaperChatController
+  @AppStorage("chatTextSizePercent") private var textSizePercent = 100
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @State private var activeQuestionID: UUID?
   @State private var isTranscriptNearBottom = true
@@ -686,6 +687,22 @@ private struct PaperChatView: View {
       HStack {
         Label("Paper chat", systemImage: "bubble.left.and.bubble.right").font(.headline)
         Spacer()
+        HStack(spacing: 4) {
+          Button("A−") { textSizePercent = max(80, min(200, textSizePercent) - 10) }
+            .disabled(textSizePercent <= 80)
+            .accessibilityLabel("Decrease chat text size")
+            .help("Decrease chat text size")
+          Button("\(min(200, max(80, textSizePercent)))%") { textSizePercent = 100 }
+            .monospacedDigit()
+            .frame(minWidth: 48)
+            .accessibilityLabel("Reset chat text size to 100 percent")
+            .help("Reset chat text size to 100%")
+          Button("A+") { textSizePercent = min(200, max(80, textSizePercent) + 10) }
+            .disabled(textSizePercent >= 200)
+            .accessibilityLabel("Increase chat text size")
+            .help("Increase chat text size")
+        }
+        .controlSize(.small)
         Button("Refresh context", systemImage: "arrow.triangle.2.circlepath") {
           controller.refreshContext()
         }.disabled(controller.isRunning || !controller.isAvailable)
@@ -755,8 +772,7 @@ private struct PaperChatView: View {
                   }
                 }
             }
-            .frame(maxWidth: 780)
-            .frame(maxWidth: .infinity, alignment: .center)
+            .frame(maxWidth: .infinity, alignment: .leading)
             .padding()
             .background(ChatScrollBoundaryView())
           }
@@ -870,7 +886,7 @@ private struct PaperChatView: View {
 
   private var chatComposerPanel: some View {
     chatComposer
-    .frame(maxWidth: 780)
+    .frame(maxWidth: .infinity)
     .padding(.horizontal, 14)
     .padding(.top, 10)
     // NavigationSplitView does not propagate the library-level bottom inset into
@@ -1158,7 +1174,7 @@ private struct ChatMessageRow: View {
     }
     .padding(.horizontal, 14)
     .padding(.vertical, 10)
-    .frame(maxWidth: 560, alignment: .leading)
+    .frame(maxWidth: .infinity, alignment: .leading)
     .background(Color.accentColor.opacity(0.16))
     .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
     .overlay {
