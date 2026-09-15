@@ -119,20 +119,53 @@ private struct PDFViewRepresentable: NSViewRepresentable {
 private final class AppearancePDFView: PDFView {
   private let tint = PDFTintView()
 
+  override func layout() {
+    super.layout()
+    tint.needsDisplay = true
+  }
+
   func setDarkMode(_ enabled: Bool) {
     if tint.superview == nil {
       tint.wantsLayer = true
-      tint.layer?.backgroundColor = NSColor.white.cgColor
+      tint.pdfView = self
       tint.compositingFilter = CIFilter(name: "CIDifferenceBlendMode")
       tint.alphaValue = 1
       tint.autoresizingMask = [.width, .height]
       tint.frame = bounds
       addSubview(tint, positioned: .above, relativeTo: nil)
+      NotificationCenter.default.addObserver(
+        self, selector: #selector(scrollBoundsChanged(_:)),
+        name: NSView.boundsDidChangeNotification, object: nil)
     }
     tint.isHidden = !enabled
+    tint.needsDisplay = true
+  }
+
+  @objc private func scrollBoundsChanged(_ notification: Notification) {
+    guard let clip = notification.object as? NSClipView, clip.isDescendant(of: self) else { return }
+    tint.needsDisplay = true
+  }
+
+  deinit {
+    NotificationCenter.default.removeObserver(self)
   }
 }
 
 private final class PDFTintView: NSView {
+  weak var pdfView: PDFView?
+
   override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+  override func draw(_ dirtyRect: NSRect) {
+    NSColor.white.setFill()
+    bounds.fill()
+    guard let pdfView, let document = pdfView.document else { return }
+    // Black in the difference overlay preserves the white page edge below it.
+    NSColor.black.setFill()
+    let thickness = 1 / (window?.backingScaleFactor ?? 1)
+    for page in pdfView.visiblePages where document.index(for: page) < document.pageCount - 1 {
+      let pageRect = convert(pdfView.convert(page.bounds(for: pdfView.displayBox), from: page), from: pdfView)
+      NSRect(x: pageRect.minX, y: pageRect.minY, width: pageRect.width, height: thickness).fill()
+    }
+  }
 }
