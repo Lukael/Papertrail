@@ -23,6 +23,10 @@ struct ChatLiveAssistantState { var reasoning: String?; var response: String? }
   static func main() throws {
     _ = NSApplication.shared
     NSApp.setActivationPolicy(.accessory)
+    if CommandLine.arguments.contains("--rail-layout") {
+      verifyRailLayout()
+      return
+    }
     let controller = PaperChatController()
     let count = Int(CommandLine.arguments.dropFirst().first ?? "60")!
     let isMath = CommandLine.arguments.contains("--math")
@@ -100,4 +104,39 @@ struct ChatLiveAssistantState { var reasoning: String?; var response: String? }
     print(String(data: try JSONSerialization.data(withJSONObject: result, options: [.sortedKeys]), encoding: .utf8)!)
     window.orderOut(nil)
   }
+
+  static func verifyRailLayout() {
+    for count in [1, 30, 200] {
+      for width in [300.0, 650.0] {
+        let questions = (0..<count).map { i in
+          ChatMessageRecord(id: UUID(), paperID: UUID(), sessionID: UUID(), operationID: nil,
+            role: "user", content: "Question \(i)", draft: nil,
+            deliveryState: "committed", createdAt: Date())
+        }
+        var measured = CGSize.zero
+        let rail = ChatQuestionRail(questions: questions, activeQuestionID: questions.last?.id,
+          onSelect: { _ in })
+          .background(GeometryReader { geometry in
+            Color.clear.onAppear { measured = geometry.size }
+              .onChange(of: geometry.size) { measured = geometry.size }
+          })
+          .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .trailing)
+        let hosting = NSHostingView(rootView: rail)
+        let window = NSWindow(contentRect: NSRect(x: 100, y: 100, width: width, height: 600),
+          styleMask: [.titled], backing: .buffered, defer: false)
+        window.contentView = hosting
+        window.orderFront(nil)
+        hosting.layoutSubtreeIfNeeded()
+        RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+        let expectedHeight = min(CGFloat(count * 14 + 8), 320) + 78
+        precondition(abs(measured.width - 46) < 1,
+          "Question rail covers transcript: width \(measured.width), expected 46")
+        precondition(abs(measured.height - expectedHeight) < 1,
+          "Question rail stretches vertically: height \(measured.height), expected \(expectedHeight)")
+        window.orderOut(nil)
+      }
+    }
+    print("PASS: question rail remains 46pt wide with content-sized height in 6 native layouts")
+  }
+
 }

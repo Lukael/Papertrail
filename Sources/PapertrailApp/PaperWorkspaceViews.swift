@@ -988,8 +988,9 @@ private struct ChatQuestionRail: View {
             if let activeQuestionID { railProxy.scrollTo(activeQuestionID, anchor: .center) }
           }
         }
-        .frame(height: min(CGFloat(questions.count * 14 + 8), 320))
       }
+      // Size the whole track so both the scroll view and capsule stay compact.
+      .frame(width: 36, height: min(CGFloat(questions.count * 14 + 8), 320))
 
       Button("Next question", systemImage: "chevron.down") {
         onSelect(questions[min(activeIndex + 1, questions.count - 1)].id)

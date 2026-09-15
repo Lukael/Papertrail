@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import sys
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -38,7 +39,8 @@ def main():
     assert source.count(marker) == 1, "Update production View extraction boundary"
     view = OUTPUT / "ChatView.swift"
     extracted = ("import AppKit\nimport SwiftUI\nimport PapertrailCore\n" +
-                 source[source.index(marker):].replace(marker, "struct PaperChatView:", 1))
+                 source[source.index(marker):].replace(marker, "struct PaperChatView:", 1)
+                 .replace("private struct ChatQuestionRail:", "struct ChatQuestionRail:", 1))
     view.write_text(extracted)
     bounded_expression = "controller.messages.suffix(from: firstVisibleIndex)"
     assert extracted.count(bounded_expression) == 1, "Update transcript window baseline replacement"
@@ -54,10 +56,18 @@ def main():
                      "Sources/PapertrailApp/ChatTranscriptWindow.swift",
                      "Sources/PapertrailApp/ChatMathWebView.swift",
                      "Sources/PapertrailApp/ChatMessageContentView.swift"]
-    for input_view, output in [(view, rendering), (baseline_view, baseline_rendering)]:
+    builds = [(view, rendering)]
+    if "--layout-only" not in sys.argv:
+        builds.append((baseline_view, baseline_rendering))
+    for input_view, output in builds:
         run(compiler + ["-I", str(bin_path / "Modules"), "-I",
             str(bin_path / "PPRProcessSupervisor.build"), str(input_view)] +
             render_inputs + objects + ["-o", str(output)])
+    result = run([str(rendering), "--rail-layout"], capture_output=True, text=True)
+    (OUTPUT / "rail-layout.log").write_text(result.stdout + result.stderr)
+    print(result.stdout, end="")
+    if "--layout-only" in sys.argv:
+        return
     for name, args in [
         ("trackpad-routing", [str(routing)]),
         ("transcript-window", [str(transcript_window)]),
