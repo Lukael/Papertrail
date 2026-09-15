@@ -73,6 +73,7 @@ def main():
         ("transcript-window", [str(transcript_window)]),
         ("trackpad-render", [str(rendering), "60"]),
         ("trackpad-math", [str(rendering), "20", "--math"]),
+        ("trackpad-table", [str(rendering), "20", "--table"]),
     ]:
         result = run(args, capture_output=True, text=True)
         (OUTPUT / f"{name}.log").write_text(result.stdout + result.stderr)

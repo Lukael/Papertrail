@@ -91,7 +91,20 @@ public final class ChatMathRenderer {
   }
 
   public func html(for text: String) -> String {
-    let body = ChatMathContent.segments(in: text).map { segment in
+    let body = ChatMarkdownTable.blocks(in: text).map { block in
+      switch block {
+      case .text(let value):
+        return renderTextAndMath(value)
+      case .table(let table):
+        return render(table: table)
+      }
+    }.joined()
+
+    return document(body: body)
+  }
+
+  private func renderTextAndMath(_ text: String) -> String {
+    ChatMathContent.segments(in: text).map { segment in
       switch segment {
       case .text(let value):
         return "<span class=\"text\">\(Self.escapeHTML(value))</span>"
@@ -99,6 +112,44 @@ public final class ChatMathRenderer {
         return render(source: source, display: display)
       }
     }.joined()
+  }
+
+  private func render(table: ChatMarkdownTable.Table) -> String {
+    func cell(_ value: String, header: Bool, alignment: ChatMarkdownTable.Alignment) -> String {
+      let tag = header ? "th" : "td"
+      let cssAlignment: String
+      switch alignment {
+      case .leading: cssAlignment = "left"
+      case .center: cssAlignment = "center"
+      case .trailing: cssAlignment = "right"
+      }
+      return "<\(tag) style=\"text-align:\(cssAlignment)\">\(renderTableCell(value))</\(tag)>"
+    }
+
+    let header = zip(table.headers, table.alignments).map {
+      cell($0.0, header: true, alignment: $0.1)
+    }.joined()
+    let rows = table.rows.map { row in
+      let columns = zip(row, table.alignments).map {
+        cell($0.0, header: false, alignment: $0.1)
+      }.joined()
+      return "<tr>\(columns)</tr>"
+    }.joined()
+    return "<div class=\"table-scroll\"><table><thead><tr>\(header)</tr></thead><tbody>\(rows)</tbody></table></div>"
+  }
+
+  private func renderTableCell(_ value: String) -> String {
+    ChatMathContent.segments(in: value).map { segment in
+      switch segment {
+      case .math(let source, let display):
+        return render(source: source, display: display)
+      case .text(let text):
+        return Self.renderSafeInlineMarkdown(text)
+      }
+    }.joined()
+  }
+
+  private func document(body: String) -> String {
 
     return """
       <!doctype html>
@@ -111,17 +162,55 @@ public final class ChatMathRenderer {
       :root { color-scheme: light dark; font: 13px -apple-system, BlinkMacSystemFont, system-ui, sans-serif; }
       /* Keep the document viewport fixed; #content retains its natural height for native sizing. */
       html, body { height: 100%; margin: 0; padding: 0; background: transparent; color: CanvasText; overflow: clip; }
-      #content { overflow-wrap: anywhere; }
+      #content { display: flow-root; overflow-wrap: anywhere; }
       .text { white-space: pre-wrap; }
       .math-inline { display: inline; white-space: normal; }
       .math-display { display: block; overflow-x: auto; overflow-y: hidden; padding: 0.2em 0; white-space: normal; }
       .math-unsupported { white-space: pre-wrap; text-decoration: underline dotted; text-decoration-color: #cc7a00; }
+      .table-scroll { width: 100%; overflow-x: auto; overflow-y: hidden; margin: 0.35em 0; }
+      table { border-collapse: collapse; min-width: 100%; width: max-content; }
+      th, td { border: 1px solid color-mix(in srgb, CanvasText 22%, transparent); min-width: 5em; max-width: 24em; padding: 0.4em 0.55em; vertical-align: top; white-space: normal; }
+      th { background: color-mix(in srgb, CanvasText 7%, transparent); font-weight: 600; }
       math { font-size: 1.05em; }
       </style>
       </head>
       <body><div id="content">\(body)</div></body>
       </html>
       """
+  }
+
+  private static func renderSafeInlineMarkdown(_ value: String) -> String {
+    let characters = Array(value)
+    var output = ""
+    var index = 0
+    while index < characters.count {
+      if characters[index] == "`",
+        let close = characters[(index + 1)...].firstIndex(of: "`")
+      {
+        output += "<code>\(escapeHTML(String(characters[(index + 1)..<close])))</code>"
+        index = close + 1
+      } else if index + 1 < characters.count,
+        characters[index] == "*", characters[index + 1] == "*",
+        let close = findDoubleAsterisk(in: characters, after: index + 2)
+      {
+        output += "<strong>\(escapeHTML(String(characters[(index + 2)..<close])))</strong>"
+        index = close + 2
+      } else {
+        output += escapeHTML(String(characters[index]))
+        index += 1
+      }
+    }
+    return output
+  }
+
+  private static func findDoubleAsterisk(in characters: [Character], after start: Int) -> Int? {
+    guard start < characters.count else { return nil }
+    for index in start..<(characters.count - 1) where
+      characters[index] == "*" && characters[index + 1] == "*"
+    {
+      return index
+    }
+    return nil
   }
 
   private func render(source: String, display: Bool) -> String {

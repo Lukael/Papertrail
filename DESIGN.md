@@ -118,6 +118,12 @@
 - Keep dates, selection, and source copy available; resize math messages with the chat column and allow horizontal scrolling for long display equations.
 - Use bundled local KaTeX to produce static MathML; no remote fonts, CDN requests, or page scripts.
 
+## Chat tables
+
+- Render Markdown pipe tables in user and assistant messages, including messages without math, with header cells, row borders, and column alignment.
+- Preserve LaTeX within cells and retain the original source for copying. Code-fenced examples remain literal text.
+- Wide tables scroll horizontally inside the message; vertical scrolling remains owned by the transcript. Table rendering uses the existing local, script-free HTML view.
+
 ## Open questions
 
 - [ ] Pixel-level comparison screenshot baseline for the current host.
