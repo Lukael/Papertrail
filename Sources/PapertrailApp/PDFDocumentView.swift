@@ -159,13 +159,16 @@ private final class PDFTintView: NSView {
   override func draw(_ dirtyRect: NSRect) {
     NSColor.white.setFill()
     bounds.fill()
-    guard let pdfView, let document = pdfView.document else { return }
+    guard let pdfView else { return }
     // Black in the difference overlay preserves the white page edge below it.
     NSColor.black.setFill()
     let thickness = 1 / (window?.backingScaleFactor ?? 1)
-    for page in pdfView.visiblePages where document.index(for: page) < document.pageCount - 1 {
+    for page in pdfView.visiblePages {
       let pageRect = convert(pdfView.convert(page.bounds(for: pdfView.displayBox), from: page), from: pdfView)
-      NSRect(x: pageRect.minX, y: pageRect.minY, width: pageRect.width, height: thickness).fill()
+      let outline = NSBezierPath(rect: pageRect.insetBy(dx: thickness / 2, dy: thickness / 2))
+      outline.lineWidth = thickness
+      NSColor.black.setStroke()
+      outline.stroke()
     }
   }
 }

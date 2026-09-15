@@ -140,4 +140,4 @@
 - Apply a display-only dark color transform to the native PDF view. Turning it off restores original colors without replacing the PDF document or changing page/zoom state.
 - Use full-opacity difference blending: white becomes pure black, black becomes white. The current transform also inverts image colors.
 - Disable PDF page border shadows in both light and dark mode.
-- In dark mode, draw a thin white separator at each page's bottom edge, except the final page; keep it aligned during scrolling and zooming.
+- In dark mode, outline all four edges of every page with a thin white border, including the final page; match the actual page bounds during scrolling and zooming.
