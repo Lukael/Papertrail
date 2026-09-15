@@ -639,7 +639,7 @@ enum Gate0ETests {
       "liveAssistant = ChatLiveAssistantState", "progressHandler()",
     ] { try expect(app.contains(required), "UI controller lacks \(required)") }
     for required in [
-      "PaperChatView", "ForEach(controller.messages)", "Cancel", "Refresh context",
+      "PaperChatView", "ForEach(controller.messages.suffix(from: firstVisibleIndex))", "Cancel", "Refresh context",
       "Button(\"Retry\")", "CodexModelSelection.allCases", "CodexReasoningEffort.allCases",
       "Menu {", "chatComposerPanel", ".safeAreaInset(edge: .bottom", "ChatMessageRow",
       ".frame(maxWidth: .infinity, alignment: isUser ? .trailing : .leading)",
