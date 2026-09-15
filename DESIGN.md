@@ -143,3 +143,5 @@
 - Use full-opacity difference blending: white becomes pure black, black becomes white. The current transform also inverts image colors.
 - Disable PDF page border shadows in both light and dark mode.
 - In dark mode, outline all four edges of every page with a thin white border, including the final page; match the actual page bounds during scrolling and zooming.
+
+- Chat reading rhythm: body line height 1.6, headings 1.3, code blocks and tables 1.4; Markdown paragraph margins 0.8em. Native plain text adds spacing to match the body line height. These values follow the selected text size.

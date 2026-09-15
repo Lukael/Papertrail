@@ -25,6 +25,8 @@ struct ChatMessageContentView: View {
       } else {
         Text(text)
           .font(.system(size: fontSize))
+          .lineSpacing(max(0, fontSize * 1.6 - NSLayoutManager().defaultLineHeight(
+            for: .systemFont(ofSize: fontSize))))
           .textSelection(.enabled)
           .contextMenu {
             Button("Copy message source") {
