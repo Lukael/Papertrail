@@ -133,3 +133,8 @@
 ## Open questions
 
 - [ ] Pixel-level comparison screenshot baseline for the current host.
+
+## PDF appearance
+
+- Show a Dark PDF toggle at the trailing edge of the source toolbar while the PDF pane is visible. Default off; persist the preference across papers and launches.
+- Apply a display-only dark color transform to the native PDF view. Turning it off restores original colors without replacing the PDF document or changing page/zoom state.

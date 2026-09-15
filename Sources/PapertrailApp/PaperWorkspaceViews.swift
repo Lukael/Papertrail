@@ -455,6 +455,7 @@ struct PaperWorkspaceView: View {
   @ObservedObject var chatController: PaperChatController
   @State private var showsPaper = true
   @State private var showsReview = false
+  @AppStorage("pdfDarkMode") private var pdfDarkMode = false
 
   private var chatView: some View {
     PaperChatView(controller: chatController)
@@ -503,6 +504,14 @@ struct PaperWorkspaceView: View {
       .toggleStyle(.button)
       .accessibilityHint("Show or hide the review pane. At least one source pane stays visible.")
       Spacer()
+      if showsPaper {
+        Toggle(isOn: $pdfDarkMode) {
+          Label("Dark PDF", systemImage: "moon.fill")
+        }
+        .toggleStyle(.button)
+        .help("Turn PDF dark mode on or off")
+        .accessibilityLabel("PDF dark mode")
+      }
     }
     .padding(.horizontal, 14).padding(.vertical, 10)
     .background(.bar)
@@ -546,7 +555,7 @@ struct PaperWorkspaceView: View {
   @ViewBuilder private var paperPane: some View {
     if let url = try? controller.sourceURL(for: paper) {
       PDFDocumentView(
-        url: url, pageIndex: paper.pageIndex, scale: paper.scale
+        url: url, pageIndex: paper.pageIndex, scale: paper.scale, isDarkMode: pdfDarkMode
       ) { page, scale in
         controller.updateReadingState(paperID: paper.id, pageIndex: page, scale: scale)
       }
