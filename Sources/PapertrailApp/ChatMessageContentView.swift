@@ -5,22 +5,26 @@ import SwiftUI
 /// Keeps persisted messages untouched while presenting Markdown and math.
 struct ChatMessageContentView: View {
   let text: String
+  @AppStorage("chatTextSizePercent") private var textSizePercent = 100
   @State private var html: String?
   @State private var height: CGFloat = 24
   @State private var renderingError: String?
+
+  private var fontSize: CGFloat { 13 * CGFloat(min(200, max(80, textSizePercent))) / 100 }
 
   var body: some View {
     VStack(alignment: .leading, spacing: 4) {
       if let html {
         // Keep SwiftUI contextMenu off the native WebView: it blanks embedded content
         // after scrolling on macOS. The WebView supplies its own source-copy menu.
-        ChatMathWebView(html: html, sourceText: text) { newHeight in
+        ChatMathWebView(html: html, sourceText: text, fontSize: fontSize) { newHeight in
           if abs(height - newHeight) > 0.5 { height = newHeight }
         }
         .frame(maxWidth: .infinity)
         .frame(height: height)
       } else {
         Text(text)
+          .font(.system(size: fontSize))
           .textSelection(.enabled)
           .contextMenu {
             Button("Copy message source") {
