@@ -94,24 +94,15 @@ public final class ChatMathRenderer {
     let body = ChatMarkdownTable.blocks(in: text).map { block in
       switch block {
       case .text(let value):
-        return renderTextAndMath(value)
+        return ChatMarkdownRenderer.htmlFragment(for: value) { source, display in
+          self.render(source: source, display: display)
+        }
       case .table(let table):
         return render(table: table)
       }
     }.joined()
 
     return document(body: body)
-  }
-
-  private func renderTextAndMath(_ text: String) -> String {
-    ChatMathContent.segments(in: text).map { segment in
-      switch segment {
-      case .text(let value):
-        return "<span class=\"text\">\(Self.escapeHTML(value))</span>"
-      case .math(let source, let display):
-        return render(source: source, display: display)
-      }
-    }.joined()
   }
 
   private func render(table: ChatMarkdownTable.Table) -> String {
@@ -139,14 +130,9 @@ public final class ChatMathRenderer {
   }
 
   private func renderTableCell(_ value: String) -> String {
-    ChatMathContent.segments(in: value).map { segment in
-      switch segment {
-      case .math(let source, let display):
-        return render(source: source, display: display)
-      case .text(let text):
-        return Self.renderSafeInlineMarkdown(text)
-      }
-    }.joined()
+    ChatMarkdownRenderer.inlineHTML(for: value) { source, display in
+      self.render(source: source, display: display)
+    }
   }
 
   private func document(body: String) -> String {
@@ -164,6 +150,19 @@ public final class ChatMathRenderer {
       html, body { height: 100%; margin: 0; padding: 0; background: transparent; color: CanvasText; overflow: clip; }
       #content { display: flow-root; overflow-wrap: anywhere; }
       .text { white-space: pre-wrap; }
+      p { margin: 0.45em 0; }
+      h1, h2, h3, h4, h5, h6 { line-height: 1.25; margin: 0.65em 0 0.3em; }
+      h1 { font-size: 1.55em; } h2 { font-size: 1.4em; } h3 { font-size: 1.25em; }
+      h4 { font-size: 1.12em; } h5 { font-size: 1em; } h6 { font-size: 0.92em; }
+      ul, ol { margin: 0.35em 0; padding-left: 1.75em; }
+      li > p { margin: 0.15em 0; }
+      blockquote { margin: 0.45em 0; padding: 0.05em 0.75em; border-left: 3px solid color-mix(in srgb, CanvasText 25%, transparent); color: color-mix(in srgb, CanvasText 78%, transparent); }
+      code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.92em; background: color-mix(in srgb, CanvasText 8%, transparent); border-radius: 4px; padding: 0.08em 0.25em; }
+      pre { max-width: 100%; overflow-x: auto; overflow-y: hidden; margin: 0.5em 0; padding: 0.65em 0.75em; background: color-mix(in srgb, CanvasText 8%, transparent); border-radius: 6px; white-space: pre; }
+      pre code { background: transparent; padding: 0; }
+      a { color: LinkText; text-decoration: underline; }
+      .image-alt { font-style: italic; }
+      hr { border: 0; border-top: 1px solid color-mix(in srgb, CanvasText 22%, transparent); margin: 0.75em 0; }
       .math-inline { display: inline; white-space: normal; }
       .math-display { display: block; overflow-x: auto; overflow-y: hidden; padding: 0.2em 0; white-space: normal; }
       .math-unsupported { white-space: pre-wrap; text-decoration: underline dotted; text-decoration-color: #cc7a00; }
@@ -177,40 +176,6 @@ public final class ChatMathRenderer {
       <body><div id="content">\(body)</div></body>
       </html>
       """
-  }
-
-  private static func renderSafeInlineMarkdown(_ value: String) -> String {
-    let characters = Array(value)
-    var output = ""
-    var index = 0
-    while index < characters.count {
-      if characters[index] == "`",
-        let close = characters[(index + 1)...].firstIndex(of: "`")
-      {
-        output += "<code>\(escapeHTML(String(characters[(index + 1)..<close])))</code>"
-        index = close + 1
-      } else if index + 1 < characters.count,
-        characters[index] == "*", characters[index + 1] == "*",
-        let close = findDoubleAsterisk(in: characters, after: index + 2)
-      {
-        output += "<strong>\(escapeHTML(String(characters[(index + 2)..<close])))</strong>"
-        index = close + 2
-      } else {
-        output += escapeHTML(String(characters[index]))
-        index += 1
-      }
-    }
-    return output
-  }
-
-  private static func findDoubleAsterisk(in characters: [Character], after start: Int) -> Int? {
-    guard start < characters.count else { return nil }
-    for index in start..<(characters.count - 1) where
-      characters[index] == "*" && characters[index + 1] == "*"
-    {
-      return index
-    }
-    return nil
   }
 
   private func render(source: String, display: Bool) -> String {

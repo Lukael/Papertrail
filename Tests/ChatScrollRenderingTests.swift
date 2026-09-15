@@ -31,8 +31,10 @@ struct ChatLiveAssistantState { var reasoning: String?; var response: String? }
     let count = Int(CommandLine.arguments.dropFirst().first ?? "60")!
     let isMath = CommandLine.arguments.contains("--math")
     let isTable = CommandLine.arguments.contains("--table")
+    let isMarkdown = CommandLine.arguments.contains("--markdown")
     let isHistoryProbe = CommandLine.arguments.contains("--history-probe")
     let plain = (isTable ? "| Metric | Value |\n| --- | ---: |\n| Accuracy | 95% |\n\n" : "")
+      + (isMarkdown ? "### Results\n\n**Strong** and *emphasis*.\n\n- First\n- Second\n\n> Quoted text\n\n```swift\nlet value = 42\n```\n\n" : "")
       + (isMath ? "$x^2+y^2$\n" : "") + String(
       repeating: "일반 텍스트 문장입니다. This is a plain response with no mathematics. ",
       count: isHistoryProbe ? 2 : 50)
@@ -62,9 +64,9 @@ struct ChatLiveAssistantState { var reasoning: String?; var response: String? }
     }
     guard let scroll = find(hosting), let doc = scroll.documentView else { fatalError("No transcript scroll view") }
     let webViewCount = countWebViews(hosting)
-    if isTable {
+    if isTable || isMarkdown {
       precondition(webViewCount == min(count, ChatTranscriptWindow.pageSize) / 2,
-        "table-only messages did not use the formatted renderer")
+        "formatted messages without math did not use the HTML renderer")
     }
     if CommandLine.arguments.contains("--bounded-history") {
       precondition(count == 400, "bounded history probe must exercise 400 messages")

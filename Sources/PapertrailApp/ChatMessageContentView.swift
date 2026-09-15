@@ -2,7 +2,7 @@ import AppKit
 import PapertrailCore
 import SwiftUI
 
-/// Keeps persisted messages untouched while presenting math and Markdown tables.
+/// Keeps persisted messages untouched while presenting Markdown and math.
 struct ChatMessageContentView: View {
   let text: String
   @State private var html: String?
@@ -41,7 +41,7 @@ struct ChatMessageContentView: View {
         if case .math = $0 { return true }
         return false
       }
-      guard hasMath || ChatMarkdownTable.containsTable(in: text) else {
+      guard hasMath || ChatMarkdownRenderer.requiresHTML(in: text) else {
         html = nil
         renderingError = nil
         return

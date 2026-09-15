@@ -100,6 +100,78 @@ func testMathRenderer() throws {
   try expectMath(!hostileTable.contains("<img"), "raw image in table cell became markup")
   try expectMath(!hostileTable.contains("<script>"), "raw script in table cell became executable markup")
 
+  try expectMath(!ChatMarkdownRenderer.requiresHTML(in: "ordinary chat text"), "plain text unnecessarily required HTML")
+  try expectMath(ChatMarkdownRenderer.requiresHTML(in: "### Findings"), "heading Markdown was not detected")
+  try expectMath(ChatMarkdownRenderer.requiresHTML(in: "- first\n- second"), "list Markdown was not detected")
+  try expectMath(ChatMarkdownRenderer.requiresHTML(in: "**important**"), "inline Markdown was not detected")
+
+  let basicMarkdown = renderer.html(for: """
+    ### Findings
+
+    A **strong**, *emphasized*, ~~removed~~, and `literal` result.
+
+    > Read this carefully.
+
+    1. first
+    2. second
+
+    - outer
+      - inner
+
+    ---
+    """)
+  try expectMath(basicMarkdown.contains("<h3>Findings</h3>"), "level-three heading was not rendered")
+  try expectMath(basicMarkdown.contains("<strong>strong</strong>"), "strong emphasis was not rendered")
+  try expectMath(basicMarkdown.contains("<em>emphasized</em>"), "emphasis was not rendered")
+  try expectMath(basicMarkdown.contains("<del>removed</del>"), "strikethrough was not rendered")
+  try expectMath(basicMarkdown.contains("<code>literal</code>"), "inline code was not rendered")
+  try expectMath(basicMarkdown.contains("<blockquote>"), "block quote was not rendered")
+  try expectMath(basicMarkdown.contains("<ol"), "ordered list was not rendered")
+  try expectMath(basicMarkdown.components(separatedBy: "<ul>").count >= 3, "nested unordered list was not rendered")
+  try expectMath(
+    basicMarkdown.components(separatedBy: "<li").count == 5,
+    "nested and sibling list items were duplicated"
+  )
+  try expectMath(basicMarkdown.contains("<hr>"), "thematic break was not rendered")
+
+  let fencedCode = renderer.html(for: """
+    ```swift
+    let formula = "$notMath$"
+    if value < 3 { print(value) }
+    ```
+    """)
+  try expectMath(fencedCode.contains("<pre><code>"), "fenced code block was not rendered")
+  try expectMath(fencedCode.contains("&lt; 3"), "code block content was not escaped")
+  try expectMath(fencedCode.contains("$notMath$"), "math syntax inside code was interpreted")
+  try expectMath(!fencedCode.contains("<math"), "code block produced math markup")
+
+  let mixedMarkdownAndMath = renderer.html(for: "### Equation\n\n**Result:** $\\frac{1}{2}$")
+  try expectMath(mixedMarkdownAndMath.contains("<h3>Equation</h3>"), "heading beside math was not rendered")
+  try expectMath(mixedMarkdownAndMath.contains("<strong>Result:</strong>"), "bold text beside math was not rendered")
+  try expectMath(mixedMarkdownAndMath.contains("<mfrac>"), "math beside Markdown was not preserved")
+
+  let headingAndTable = renderer.html(for: "### Values\n\nName | Value\n--- | ---\nA | **one**")
+  try expectMath(headingAndTable.contains("<h3>Values</h3>"), "heading before table was not rendered")
+  try expectMath(headingAndTable.contains("<table>"), "table after heading was not preserved")
+  try expectMath(headingAndTable.contains("<strong>one</strong>"), "table inline Markdown was not preserved")
+
+  let safeLinks = renderer.html(
+    for: "[web](https://example.com) [mail](mailto:test@example.com) [bad](javascript:evil)"
+  )
+  try expectMath(safeLinks.contains("href=\"https://example.com\""), "HTTPS link was not rendered")
+  try expectMath(safeLinks.contains("href=\"mailto:test@example.com\""), "mailto link was not rendered")
+  try expectMath(!safeLinks.contains("href=\"javascript:"), "unsafe link scheme was rendered")
+  try expectMath(safeLinks.contains("bad"), "unsafe link label disappeared")
+
+  let remoteImage = renderer.html(for: "![diagram](https://example.com/diagram.png)")
+  try expectMath(remoteImage.contains("diagram"), "remote image alt text disappeared")
+  try expectMath(!remoteImage.contains("<img"), "remote Markdown image became active content")
+
+  let hostileMarkdown = renderer.html(for: "### <script>alert(1)</script>\n\n<img src=x>")
+  try expectMath(hostileMarkdown.contains("&lt;script&gt;"), "raw HTML in Markdown was not escaped")
+  try expectMath(!hostileMarkdown.contains("<script>"), "raw HTML in Markdown became executable")
+  try expectMath(!hostileMarkdown.contains("<img"), "raw image HTML in Markdown became active content")
+
   print("PASS math renderer")
 }
 

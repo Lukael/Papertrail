@@ -124,6 +124,12 @@
 - Preserve LaTeX within cells and retain the original source for copying. Code-fenced examples remain literal text.
 - Wide tables scroll horizontally inside the message; vertical scrolling remains owned by the transcript. Table rendering uses the existing local, script-free HTML view.
 
+## Chat Markdown
+
+- Format headings, paragraphs, emphasis, ordered/unordered lists, block quotes, inline/fenced code, separators, and links alongside tables and LaTeX.
+- Preserve literal syntax inside code and the original message for copying. Plain messages keep the lightweight native text path.
+- Open explicitly clicked web/email links with the system application; never load remote images or execute message HTML/scripts inside chat.
+
 ## Open questions
 
 - [ ] Pixel-level comparison screenshot baseline for the current host.
