@@ -123,7 +123,7 @@ private final class AppearancePDFView: PDFView {
       tint.wantsLayer = true
       tint.layer?.backgroundColor = NSColor.white.cgColor
       tint.compositingFilter = CIFilter(name: "CIDifferenceBlendMode")
-      tint.alphaValue = 0.92
+      tint.alphaValue = 1
       tint.autoresizingMask = [.width, .height]
       tint.frame = bounds
       addSubview(tint, positioned: .above, relativeTo: nil)
