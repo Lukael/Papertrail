@@ -323,6 +323,8 @@ private final class PDFTintView: NSView {
   override func hitTest(_ point: NSPoint) -> NSView? { nil }
 
   override func draw(_ dirtyRect: NSRect) {
+    // A partially visible page can extend behind the toolbar; clip its outline.
+    NSBezierPath(rect: bounds).addClip()
     NSColor.white.setFill()
     bounds.fill()
     guard let pdfView else { return }
