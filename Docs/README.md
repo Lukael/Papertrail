@@ -84,6 +84,16 @@ swiftc -module-cache-path .build/ModuleCache -parse-as-library \
 .build/scenarios/paper-search-tags/PaperTagsEditorTests
 ```
 
+## PDF 검색과 채팅 줄바꿈
+
+```sh
+sh Scripts/verify-pdf-search.sh
+python3 Scripts/verify-chat-scroll.py --layout-only
+```
+
+PDF 검사는 생성한 임시 PDF에서 대소문자 무시 검색·페이지 간 결과 이동·검색 해제·문서 전환을 확인합니다.
+채팅 검사는 실제 입력창 코드에 Shift+Enter를 보내 커서 위치 줄바꿈과 전송 방지를 확인하고, Enter가 한 번 전송되는지 검사합니다. 실제 Codex에는 요청하지 않습니다.
+
 ## 실제 Codex 생성
 
 다음 하네스는 별도 라이브러리에 합성 논문과 완료된 대화를 넣고 실제 Codex를 호출합니다.
