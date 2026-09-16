@@ -11,6 +11,7 @@ struct PDFDocumentView: View {
 
   @State private var isSearchVisible = false
   @State private var searchQuery = ""
+  @State private var submittedSearchQuery = ""
   @State private var searchIndex = 0
   @State private var searchResultCount = 0
   @FocusState private var isSearchFocused: Bool
@@ -19,7 +20,7 @@ struct PDFDocumentView: View {
     ZStack(alignment: .topTrailing) {
       PDFViewRepresentable(
         url: url, pageIndex: pageIndex, scale: scale, isDarkMode: isDarkMode,
-        searchQuery: searchQuery, searchIndex: searchIndex,
+        searchQuery: submittedSearchQuery, searchIndex: searchIndex,
         onSearchResultCountChanged: { searchResultCount = $0 },
         onReadingStateChanged: onReadingStateChanged
       )
@@ -31,7 +32,15 @@ struct PDFDocumentView: View {
             .textFieldStyle(.roundedBorder)
             .frame(minWidth: 80, idealWidth: 180, maxWidth: 220)
             .focused($isSearchFocused)
-            .onSubmit { moveSearch(by: 1) }
+            .onSubmit {
+              if searchQuery == submittedSearchQuery {
+                moveSearch(by: 1)
+              } else {
+                searchIndex = 0
+                searchResultCount = 0
+                submittedSearchQuery = searchQuery
+              }
+            }
 
           Text(searchResultCount == 0 ? "0 of 0" : "\(searchIndex + 1) of \(searchResultCount)")
             .font(.caption.monospacedDigit())
@@ -62,7 +71,6 @@ struct PDFDocumentView: View {
         .keyboardShortcut("f", modifiers: .command)
         .accessibilityHidden(true)
     }
-    .onChange(of: searchQuery) { _, _ in searchIndex = 0 }
     .onChange(of: url) { _, _ in closeSearch() }
     .accessibilityElement(children: .contain)
   }
@@ -76,6 +84,7 @@ struct PDFDocumentView: View {
     isSearchVisible = false
     isSearchFocused = false
     searchQuery = ""
+    submittedSearchQuery = ""
     searchIndex = 0
     searchResultCount = 0
   }
