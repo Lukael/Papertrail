@@ -9,13 +9,24 @@ struct ChatLiveAssistantState { var reasoning: String?; var response: String? }
   @Published var messages: [ChatMessageRecord] = []
   @Published var input = ""
   var isLoading = false
-  var isRunning = false
+  @Published var isRunning = false
   var isAvailable = true
-  var liveAssistant: ChatLiveAssistantState?
-  var liveRevision = 0
+  @Published var liveAssistant: ChatLiveAssistantState?
+  @Published var liveRevision = 0
   func canRetry(_ m: ChatMessageRecord) -> Bool { false }
   func retry(_ m: ChatMessageRecord) {}
-  func send() {}
+  var sendCount = 0
+  func send() {
+    sendCount += 1
+    let text = input
+    input = ""
+    isRunning = true
+    messages.append(ChatMessageRecord(
+      id: UUID(), paperID: UUID(), sessionID: UUID(), operationID: nil,
+      role: "user", content: text, draft: nil, deliveryState: "sending", createdAt: Date()))
+    liveAssistant = ChatLiveAssistantState(reasoning: "Thinking…", response: nil)
+    liveRevision += 1
+  }
   func cancel() {}
   func refreshContext() {}
 }
@@ -23,6 +34,10 @@ struct ChatLiveAssistantState { var reasoning: String?; var response: String? }
   static func main() throws {
     _ = NSApplication.shared
     NSApp.setActivationPolicy(.accessory)
+    if CommandLine.arguments.contains("--composer") {
+      verifyComposer()
+      return
+    }
     if CommandLine.arguments.contains("--rail-layout") {
       verifyRailLayout()
       return
@@ -111,6 +126,55 @@ struct ChatLiveAssistantState { var reasoning: String?; var response: String? }
       "documentHeight":doc.frame.height,"status":"passed"]
     print(String(data: try JSONSerialization.data(withJSONObject: result, options: [.sortedKeys]), encoding: .utf8)!)
     window.orderOut(nil)
+  }
+
+  static func verifyComposer() {
+    let controller = PaperChatController()
+    controller.messages = (0..<60).map { index in
+      ChatMessageRecord(id: UUID(), paperID: UUID(), sessionID: UUID(), operationID: nil,
+        role: index.isMultiple(of: 2) ? "user" : "assistant",
+        content: "Existing message \(index)", draft: nil,
+        deliveryState: "committed", createdAt: Date())
+    }
+    let host = NSHostingView(rootView: PaperChatView(controller: controller))
+    let window = NSWindow(contentRect: NSRect(x: 100, y: 100, width: 650, height: 600),
+      styleMask: [.titled], backing: .buffered, defer: false)
+    window.contentView = host
+    window.makeKeyAndOrderFront(nil)
+    NSApp.activate(ignoringOtherApps: true)
+    RunLoop.current.run(until: Date().addingTimeInterval(0.2))
+    func field(in view: NSView) -> NSTextField? {
+      if let field = view as? NSTextField, field.isEditable { return field }
+      return view.subviews.compactMap { field(in: $0) }.first
+    }
+    guard let input = field(in: host) else { fatalError("No composer text field") }
+    window.makeFirstResponder(input)
+    guard let editor = window.firstResponder as? NSTextView else { fatalError("No field editor") }
+    editor.insertText("firstsecond", replacementRange: NSRange(location: NSNotFound, length: 0))
+    editor.setSelectedRange(NSRange(location: 5, length: 0))
+    func enter(_ modifiers: NSEvent.ModifierFlags) {
+      let event = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: modifiers,
+        timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
+        context: nil, characters: "\r", charactersIgnoringModifiers: "\r", isARepeat: false, keyCode: 36)!
+      NSApp.postEvent(event, atStart: true)
+      if let queued = NSApp.nextEvent(matching: .keyDown, until: Date(), inMode: .default, dequeue: true) {
+        window.sendEvent(queued)
+      }
+      RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+    }
+    enter(.shift)
+    precondition(controller.sendCount == 0, "Shift+Enter must not send")
+    precondition(controller.input == "first\nsecond", "Shift+Enter must insert newline at caret: \(controller.input.debugDescription)")
+    enter([])
+    precondition(controller.sendCount == 1, "Enter must send once")
+    precondition(controller.input.isEmpty && controller.isRunning,
+      "Send must clear the draft and enter the running state")
+    precondition(controller.messages.last?.content == "first\nsecond",
+      "Send must append the composed message")
+    precondition(controller.liveAssistant != nil && !input.isEnabled,
+      "Send must show progress and disable editing without blocking the run loop")
+    window.orderOut(nil)
+    print("PASS: Shift+Enter inserts at caret; Enter updates a 60-message transcript and remains responsive")
   }
 
   static func verifyRailLayout() {

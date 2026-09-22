@@ -559,7 +559,7 @@ struct PaperWorkspaceView: View {
       ) { page, scale in
         controller.updateReadingState(paperID: paper.id, pageIndex: page, scale: scale)
       }
-      .accessibilityLabel("PDF reader for \(paper.title)")
+      .accessibilityIdentifier("pdf-reader")
     } else {
       ContentUnavailableView {
         Label("Stored PDF unavailable", systemImage: "doc.badge.ellipsis")
@@ -899,11 +899,8 @@ private struct PaperChatView: View {
 
   private var chatComposer: some View {
     HStack(alignment: .bottom, spacing: 10) {
-      TextField("Ask about this paper", text: $controller.input, axis: .vertical)
-        .textFieldStyle(.plain)
-        .lineLimit(1...6)
+      ChatComposerField(text: $controller.input, onSubmit: controller.send)
         .disabled(controller.isRunning)
-        .onSubmit { controller.send() }
 
       if controller.isRunning {
         Button("Cancel", systemImage: "stop.fill", role: .destructive) {
@@ -1232,6 +1229,66 @@ private struct ChatMessageRow: View {
             .font(.caption2)
         }
       }
+    }
+  }
+}
+
+
+/// Keep newline handling in the field editor, before Return ends editing.
+private struct ChatComposerField: NSViewRepresentable {
+  @Binding var text: String
+  let onSubmit: () -> Void
+
+  func makeCoordinator() -> Coordinator { Coordinator(self) }
+
+  func makeNSView(context: Context) -> NSTextField {
+    let field = NSTextField(wrappingLabelWithString: text)
+    field.isEditable = true
+    field.isSelectable = true
+    field.isBezeled = false
+    field.drawsBackground = false
+    field.focusRingType = .none
+    field.placeholderString = "Ask about this paper"
+    field.setAccessibilityLabel("Ask about this paper")
+    field.font = .systemFont(ofSize: NSFont.systemFontSize)
+    field.maximumNumberOfLines = 6
+    field.delegate = context.coordinator
+    field.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+    return field
+  }
+
+  func updateNSView(_ field: NSTextField, context: Context) {
+    context.coordinator.parent = self
+    field.isEnabled = context.environment.isEnabled
+    if field.stringValue != text { field.stringValue = text }
+    field.invalidateIntrinsicContentSize()
+  }
+
+  func sizeThatFits(_ proposal: ProposedViewSize, nsView: NSTextField, context: Context) -> CGSize? {
+    let width = proposal.width ?? 300
+    let size = nsView.cell!.cellSize(forBounds: NSRect(x: 0, y: 0, width: width, height: 1000))
+    return CGSize(width: width, height: min(max(size.height, 20), 120))
+  }
+
+  final class Coordinator: NSObject, NSTextFieldDelegate {
+    var parent: ChatComposerField
+    init(_ parent: ChatComposerField) { self.parent = parent }
+
+    func controlTextDidChange(_ notification: Notification) {
+      guard let field = notification.object as? NSTextField else { return }
+      parent.text = field.stringValue
+      field.invalidateIntrinsicContentSize()
+    }
+
+    func control(_ control: NSControl, textView: NSTextView, doCommandBy command: Selector) -> Bool {
+      guard command == #selector(NSResponder.insertNewline(_:)) else { return false }
+      if textView.hasMarkedText() { return false }
+      if NSApp.currentEvent?.modifierFlags.contains(.shift) == true {
+        textView.insertNewlineIgnoringFieldEditor(nil)
+      } else {
+        parent.onSubmit()
+      }
+      return true
     }
   }
 }
