@@ -72,7 +72,8 @@
 ## Accessibility
 
 - Target standard: macOS native accessibility defaults.
-- Keyboard/focus behavior: native list, menu, picker, and text field behavior.
+- Keyboard/focus behavior: native list, menu, picker, and text field behavior. The chat composer sends with Return and inserts a newline at the caret with Shift+Return, preserving native selection and IME handling.
+- PDF search: Command+F opens and focuses a top-right field. Typing only edits the draft; Enter submits the query, and repeated Enter advances to the next match. Previous/next buttons wrap through highlighted text matches; Escape closes search and clears highlights. Search stays within the current document and resets on document changes.
 - Contrast/readability: semantic foreground/background colors.
 - Screen-reader semantics: each message exposes an explicit You or Papertrail assistant identity; user messages additionally expose their question position and every rail marker announces its question number and content.
 - Reduced motion and sensory considerations: message identity does not depend on animation or color alone.
