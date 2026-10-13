@@ -100,7 +100,7 @@
       }
     }
 
-    public func recordProcessResult(generationID: UUID, result: CodexTransportResult) throws {
+    public func recordProcessResult(generationID: UUID, result: AgentTransportResult) throws {
       try store.transaction { snapshot in
         guard let generationIndex = snapshot.generations.firstIndex(where: { $0.id == generationID }),
           let operationID = snapshot.generations[generationIndex].operationID,
@@ -136,11 +136,13 @@
             outcome == .turnCompleted ? "committed" : outcome.rawValue
           snapshot.messages[messageIndex].updatedAt = Date()
         }
-        let projectedMessages = result.state.messages.isEmpty && outcome == .turnCompleted
+        // Claude's review answer is the JSON document itself, so the chat records a fixed
+        // summary instead of echoing the document or a partial fragment of it.
+        let projectedMessages = outcome == .turnCompleted
           ? [ProjectedMessage(
               itemID: "papertrail-review-completed", draft: nil,
               committed: ReviewChatProjection.completedFallback)]
-          : result.state.messages
+          : []
         for projected in projectedMessages {
           let id = ChatMessageIdentity.assistant(
             operationID: operationID, itemID: projected.itemID)
@@ -406,7 +408,7 @@
       }
     }
 
-    private static func persisted(_ outcome: CodexOperationOutcome) -> ProcessOutcome {
+    private static func persisted(_ outcome: AgentOperationOutcome) -> ProcessOutcome {
       switch outcome {
       case .turnCompleted: .turnCompleted
       case .failed: .failed

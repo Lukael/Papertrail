@@ -17,35 +17,32 @@ final class PaperLibraryController: ObservableObject {
   }
   @Published var notice: String?
   let activityLog = AppActivityLog()
-  @Published private(set) var codexModels = CodexModelSelection.initialChoices()
-  @Published private(set) var isRefreshingCodexModels = false
-  @Published private(set) var codexModelsError: String?
-  private var lastCodexModelRefresh: Date?
-  @Published var codexModel = CodexModelSelection.load() {
+  let agentModels = AgentModelSelection.choices
+  @Published var agentModel = AgentModelSelection.load() {
     didSet {
-      guard oldValue != codexModel else { return }
-      codexModel.save()
+      guard oldValue != agentModel else { return }
+      agentModel.save()
       reviewControllers.removeAll()
       chatControllers.removeAll()
       activityLog.append(
-        level: .info, "New Codex operations will use \(codexModel.title) at \(codexEffort.title) effort.")
+        level: .info, "New Claude operations will use \(agentModel.title) at \(agentEffort.title) effort.")
     }
   }
-  @Published var codexEffort =
-    CodexModelSelection.load() == .automatic
-    ? CodexReasoningEffort.automatic : CodexReasoningEffort.load()
+  @Published var agentEffort =
+    AgentModelSelection.load() == .automatic
+    ? AgentReasoningEffort.automatic : AgentReasoningEffort.load()
   {
     didSet {
-      guard oldValue != codexEffort else { return }
-      codexEffort.save()
+      guard oldValue != agentEffort else { return }
+      agentEffort.save()
       reviewControllers.removeAll()
       chatControllers.removeAll()
       activityLog.append(
-        level: .info, "New Codex operations will use \(codexModel.title) at \(codexEffort.title) effort.")
+        level: .info, "New Claude operations will use \(agentModel.title) at \(agentEffort.title) effort.")
     }
   }
   let paths: LibraryPaths
-  private let codexExecutableProvider = CodexExecutableProvider()
+  private let agentExecutableProvider = AgentExecutableProvider()
   private let chatRuntimeRegistry = PaperChatRuntimeRegistry()
   private var reviewControllers: [UUID: ReviewGenerationController] = [:]
   private var chatControllers: [UUID: PaperChatController] = [:]
@@ -75,68 +72,19 @@ final class PaperLibraryController: ObservableObject {
     }
   #endif
 
-  func selectCodexModel(_ model: CodexModelSelection, effort: CodexReasoningEffort) {
-    guard !hasActiveCodexOperations else {
-      notice = "Wait for the current Codex operation to finish before changing models."
+  func selectAgentModel(_ model: AgentModelSelection, effort: AgentReasoningEffort) {
+    guard !hasActiveAgentOperations else {
+      notice = "Wait for the current Claude operation to finish before changing models."
       return
     }
     guard effort == .automatic || model.supportedEfforts.contains(effort) else { return }
-    codexModel = model
-    codexEffort = effort
+    agentModel = model
+    agentEffort = effort
   }
 
-  private var hasActiveCodexOperations: Bool {
+  private var hasActiveAgentOperations: Bool {
     reviewControllers.values.contains(where: \.isRunning)
       || chatControllers.values.contains(where: \.isRunning)
-  }
-
-  func refreshCodexModels(force: Bool = false) async {
-    guard !isRefreshingCodexModels,
-      force || lastCodexModelRefresh.map({ Date().timeIntervalSince($0) >= 900 }) ?? true
-    else { return }
-    isRefreshingCodexModels = true
-    lastCodexModelRefresh = Date()
-    defer { isRefreshingCodexModels = false }
-    do {
-      let executable = try await codexExecutableProvider.executableURL()
-      let models = try await Task.detached(priority: .utility) {
-        try CodexModelCatalog().fetch(executableURL: executable)
-      }.value
-      guard !Task.isCancelled else { return }
-      CodexModelSelection.cache(models)
-      codexModelsError = nil
-      // A catalog update must not detach a running review or chat from its controls.
-      let choices = [CodexModelSelection.automatic] + models.map(CodexModelSelection.init)
-      let selected = choices.first(where: { $0 == codexModel })
-      if selected == nil
-        || (codexEffort != .automatic && selected?.supportedEfforts.contains(codexEffort) != true)
-      {
-        while hasActiveCodexOperations {
-          try await Task.sleep(for: .seconds(1))
-        }
-      }
-      codexModels = choices
-      if let selected = choices.first(where: { $0 == codexModel }) {
-        codexModel = selected
-        if codexEffort != .automatic && !selected.supportedEfforts.contains(codexEffort) {
-          codexEffort = .automatic
-        }
-      } else {
-        let previous = codexModel.title
-        codexModel = .automatic
-        codexEffort = .automatic
-        activityLog.append(
-          source: .codex, level: .warning,
-          "\(previous) is no longer in the Codex model list. New operations will use Codex default.")
-      }
-      activityLog.append(source: .codex, level: .success, "Updated \(models.count) Codex models.")
-    } catch is CancellationError {
-      return
-    } catch {
-      codexModelsError = "Could not refresh models. The last saved list is still available."
-      activityLog.append(
-        source: .codex, level: .warning, "\(codexModelsError!) \(error.localizedDescription)")
-    }
   }
 
   func prepareImport(from url: URL) throws -> PreparedPDFImport {
@@ -195,14 +143,14 @@ final class PaperLibraryController: ObservableObject {
     if let existing = reviewControllers[paperID] { return existing }
     #if PPR_PORTABLE_SCHEMA
       let controller = ReviewGenerationController(
-        paperID: paperID, paths: paths, store: store, model: codexModel.commandLineValue,
-        reasoningEffort: codexEffort,
-        activityLog: activityLog, executableProvider: codexExecutableProvider)
+        paperID: paperID, paths: paths, store: store, model: agentModel.commandLineValue,
+        reasoningEffort: agentEffort,
+        activityLog: activityLog, executableProvider: agentExecutableProvider)
     #else
       let controller = ReviewGenerationController(
-        paperID: paperID, paths: paths, container: container, model: codexModel.commandLineValue,
-        reasoningEffort: codexEffort,
-        activityLog: activityLog, executableProvider: codexExecutableProvider)
+        paperID: paperID, paths: paths, container: container, model: agentModel.commandLineValue,
+        reasoningEffort: agentEffort,
+        activityLog: activityLog, executableProvider: agentExecutableProvider)
     #endif
     reviewControllers[paperID] = controller
     return controller
@@ -213,14 +161,14 @@ final class PaperLibraryController: ObservableObject {
     #if PPR_PORTABLE_SCHEMA
       let controller = PaperChatController(
         paperID: paperID, paths: paths, store: store, runtimeRegistry: chatRuntimeRegistry,
-        model: codexModel.commandLineValue, reasoningEffort: codexEffort,
-        activityLog: activityLog, executableProvider: codexExecutableProvider)
+        model: agentModel.commandLineValue, reasoningEffort: agentEffort,
+        activityLog: activityLog, executableProvider: agentExecutableProvider)
     #else
       let controller = PaperChatController(
         paperID: paperID, paths: paths, container: container,
-        runtimeRegistry: chatRuntimeRegistry, model: codexModel.commandLineValue,
-        reasoningEffort: codexEffort, activityLog: activityLog,
-        executableProvider: codexExecutableProvider)
+        runtimeRegistry: chatRuntimeRegistry, model: agentModel.commandLineValue,
+        reasoningEffort: agentEffort, activityLog: activityLog,
+        executableProvider: agentExecutableProvider)
     #endif
     controller.onUserMessage = { [weak self] date in
       self?.noteChatActivity(paperID: paperID, at: date)
@@ -386,7 +334,7 @@ final class PaperLibraryController: ObservableObject {
       try? await Task.sleep(nanoseconds: 100_000_000)
     }
     guard reviewController?.isRunning != true, chatController?.isRunning != true else {
-      notice = "Deletion is waiting for the active Codex operation to stop. Try again in a moment."
+      notice = "Deletion is waiting for the active Claude operation to stop. Try again in a moment."
       activityLog.append(level: .warning, notice ?? "Paper deletion is waiting.")
       return false
     }

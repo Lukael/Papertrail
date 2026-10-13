@@ -79,12 +79,12 @@ public struct ReviewGenerationHooks: @unchecked Sendable {
 public struct ReviewGenerationService: Sendable {
   public let paths: LibraryPaths
   public let store: any ReviewGenerationStore
-  public let transport: any CodexTransport
+  public let transport: any AgentTransport
 
   public init(
     paths: LibraryPaths, store: any ReviewGenerationStore,
-    transport: any CodexTransport = DirectProcessCodexTransport(
-      policy: CodexTransportPolicy(timeout: 1_800))
+    transport: any AgentTransport = DirectProcessAgentTransport(
+      policy: AgentTransportPolicy(timeout: 1_800))
   ) {
     self.paths = paths
     self.store = store
@@ -97,9 +97,9 @@ public struct ReviewGenerationService: Sendable {
     conversation: ReviewConversationSnapshot? = nil,
     metadata: NetworkMetadataResult = .unavailable(reason: "Network metadata was not requested."),
     autoSelect: Bool = true, model: String? = nil,
-    reasoningEffort: CodexReasoningEffort? = nil,
-    cancellation: CodexCancellationToken = .init(),
-    progress: (@Sendable (CodexLiveProgress) -> Void)? = nil,
+    reasoningEffort: AgentReasoningEffort? = nil,
+    cancellation: AgentCancellationToken = .init(),
+    progress: (@Sendable (AgentLiveProgress) -> Void)? = nil,
     hooks: ReviewGenerationHooks = .init(),
     fileManager: FileManager = .default
   ) throws -> ReviewGenerationResult {
@@ -121,6 +121,12 @@ public struct ReviewGenerationService: Sendable {
       throw ReviewGenerationServiceError.sourceHashMismatch
     }
 
+    let promptBuilder = ReviewPromptBuilder()
+    let systemPrompt = promptBuilder.systemPrompt()
+    let requestPrompt = try promptBuilder.requestPrompt(
+      paperText: try extractedText.readText(), paperTextSHA256: extractedText.manifest.textSHA256,
+      conversationJSON: String(decoding: try conversation.encoded(), as: UTF8.self))
+
     let workspace = paths.generationWorkspace(identity.generationID, paperID: paperID)
     let manifest = try ReviewTextWorkspaceBuilder().build(
       extractedText: extractedText, workspace: workspace, conversation: conversation, fileManager: fileManager)
@@ -130,10 +136,7 @@ public struct ReviewGenerationService: Sendable {
       at: workspace.appendingPathComponent(operationOutputRelativePath)
         .deletingLastPathComponent(),
       withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
-    let prompt = ReviewPromptBuilder().productionPrompt(
-      textPath: "input/paper-text.txt", reviewRelativePath: operationOutputRelativePath,
-      conversationPath: "input/conversation.json")
-    let promptHash = SHA256.hash(data: Data(prompt.utf8)).map {
+    let promptHash = SHA256.hash(data: Data((systemPrompt + "\n" + requestPrompt).utf8)).map {
       String(format: "%02x", $0)
     }.joined()
     let operationDirectory = paths.operationDirectory(
@@ -148,7 +151,8 @@ public struct ReviewGenerationService: Sendable {
 
     try writeJSON(manifest, to: workspace.appendingPathComponent("staging-manifest.json"))
     try writeJSON(metadata, to: workspace.appendingPathComponent("metadata-result.json"))
-    try writePrivate(Data(prompt.utf8), to: workspace.appendingPathComponent("prompt.md"))
+    // The staged input files already hold the stdin payload's paper text and conversation.
+    try writePrivate(Data(systemPrompt.utf8), to: workspace.appendingPathComponent("prompt.md"))
     _ = try store.createGeneration(
       generationID: identity.generationID, paperID: paperID, sessionID: identity.sessionID,
       operationID: identity.operationID, workspaceRelativePath: workspaceRelative,
@@ -156,12 +160,11 @@ public struct ReviewGenerationService: Sendable {
       promptSHA256: promptHash, journalRelativePath: journalRelative,
       predecessorGenerationID: predecessorGenerationID)
 
-    let invocation = try CodexInvocation(
-      executableURL: executableURL,
-      kind: .new, prompt: prompt,
-      workingDirectory: workspace, model: model, reasoningEffort: reasoningEffort,
-      ignoreUserConfiguration: true)
-    let result: CodexTransportResult
+    let invocation = try AgentInvocation(
+      executableURL: executableURL, kind: .ephemeral, systemPrompt: systemPrompt,
+      prompt: requestPrompt, workingDirectory: workspace, model: model,
+      reasoningEffort: reasoningEffort)
+    let result: AgentTransportResult
     do {
       result = try transport.execute(
         invocation, journal: journal, cancellation: cancellation, progress: progress)
@@ -198,7 +201,22 @@ public struct ReviewGenerationService: Sendable {
     }
     try store.transitionStructure(generationID: identity.generationID, to: .running)
 
+    // Claude has no file tools; the app writes the returned document into the operation output.
     let reviewDocumentURL = workspace.appendingPathComponent(operationOutputRelativePath)
+    let returnedDocument: Data
+    do {
+      returnedDocument = try ReviewPromptBuilder.extractDocument(from: result.state.resultText)
+    } catch {
+      try store.transitionStructure(generationID: identity.generationID, to: .failed)
+      throw ReviewGenerationServiceError.structuredDocumentInvalid(error.localizedDescription)
+    }
+    // The app is the only writer of this path; anything already there (including a dangling
+    // symlink, which `attributesOfItem` reports without following) was planted.
+    guard (try? fileManager.attributesOfItem(atPath: reviewDocumentURL.path)) == nil else {
+      try store.transitionStructure(generationID: identity.generationID, to: .failed)
+      throw ReviewGenerationServiceError.unsafeOutput(operationOutputRelativePath)
+    }
+    try writePrivate(returnedDocument, to: reviewDocumentURL)
     guard fileManager.fileExists(atPath: reviewDocumentURL.path) else {
       try store.transitionStructure(generationID: identity.generationID, to: .failed)
       throw ReviewGenerationServiceError.outputMissing(operationOutputRelativePath)
@@ -378,7 +396,7 @@ public struct ReviewGenerationService: Sendable {
     try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
   }
 
-  private static func persisted(_ outcome: CodexOperationOutcome) -> ProcessOutcome {
+  private static func persisted(_ outcome: AgentOperationOutcome) -> ProcessOutcome {
     switch outcome {
     case .turnCompleted: .turnCompleted
     case .failed: .failed

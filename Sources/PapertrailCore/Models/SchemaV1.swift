@@ -93,6 +93,8 @@
       }
     }
 
+    /// Persisted entity names predate the Claude migration and stay unchanged so existing
+    /// stores open without a schema migration. A session now records a Claude Code session ID.
     @Model
     public final class CodexSession {
       @Attribute(.unique) public var id: UUID

@@ -57,7 +57,7 @@ public struct ReviewGenerationRecord: Equatable, Sendable {
 
 /// A concise, app-owned projection of a review turn for the paper chat transcript.
 /// The complete production prompt remains in the private generation workspace and
-/// in the Codex thread; the transcript only needs enough context to make the
+/// in the Claude session; the transcript only needs enough context to make the
 /// shared review/chat conversation understandable without duplicating it.
 public enum ReviewChatProjection {
   public static func request(paperTitle: String) -> String {
@@ -92,7 +92,7 @@ public protocol ReviewGenerationStore: Sendable {
     promptSHA256: String, journalRelativePath: String,
     predecessorGenerationID: UUID?
   ) throws -> ReviewSessionRecord
-  func recordProcessResult(generationID: UUID, result: CodexTransportResult) throws
+  func recordProcessResult(generationID: UUID, result: AgentTransportResult) throws
   func recordPreparationFailure(generationID: UUID, outcome: ProcessOutcome) throws
   func transitionProcess(generationID: UUID, to: ProcessOutcome) throws
   func transitionStructure(generationID: UUID, to: StructuralValidationState) throws

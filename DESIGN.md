@@ -46,10 +46,10 @@
 - Show each user and assistant message's persisted date and time in the transcript so a reopened conversation preserves its chronology.
 - Treat every authored question as a stable conversation anchor: emphasize the currently viewed question and provide direct previous/next/marker navigation from a compact trailing-edge rail without leaving the transcript.
 - Keep the active chat composer above every persistent bottom bar and safe-area inset.
-- Keep the chat composer action-focused: do not repeat paper-context or Codex lifecycle status prose beside the input; route operational status to the global activity log.
-- Keep diagnostics global: Review content stays focused and does not repeat process, structure, evidence, or progress text; the bottom log combines app and Codex lifecycle events. Only actionable load failures remain attached to the review.
+- Keep the chat composer action-focused: do not repeat paper-context or Claude lifecycle status prose beside the input; route operational status to the global activity log.
+- Keep diagnostics global: Review content stays focused and does not repeat process, structure, evidence, or progress text; the bottom log combines app and Claude lifecycle events. Only actionable load failures remain attached to the review.
 - Keep secondary disclosures out of the workspace header; place storage and security information beside the model selector in the global toolbar.
-- Populate the model menu and its reasoning efforts from the Codex CLI catalog. Refresh at launch, foreground activation and every 15 minutes while active; retain saved choices and the last catalog on failure. Offer Refresh models and Model default in the existing menu.
+- Offer the fixed Claude model families (Opus, Sonnet, Haiku) and their effort levels in the existing menu, plus Claude default and Model default. Claude Code resolves each family to its newest model, so the menu needs no refresh action.
 - Keep the selected model and reasoning effort fully readable in the toolbar; do not replace or truncate the current selection with an icon or ellipsis when space is available.
 - Tradeoffs: prefer native SwiftUI behavior and readable adaptive layouts over pixel-specific web UI imitation.
 
@@ -104,8 +104,8 @@
 ## Content voice
 
 - Tone: concise, factual, research-oriented.
-- Terminology: use “You” and “Papertrail” for chat identities; reserve “Codex” for process/security disclosures.
-- Microcopy rules: label the first Review action “Generate document” and later actions “Regenerate document”; explain that generation captures the paper plus completed conversation through the click time. Explain persistence and paper context only where it aids onboarding; omit repeated context and Codex lifecycle labels from the active composer.
+- Terminology: use “You” and “Papertrail” for chat identities; reserve “Claude” for process/security disclosures.
+- Microcopy rules: label the first Review action “Generate document” and later actions “Regenerate document”; explain that generation captures the paper plus completed conversation through the click time. Explain persistence and paper context only where it aids onboarding; omit repeated context and Claude lifecycle labels from the active composer.
 
 ## Implementation constraints
 

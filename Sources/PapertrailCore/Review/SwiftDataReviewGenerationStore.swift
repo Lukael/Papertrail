@@ -99,7 +99,7 @@
       return Self.sessionRecord(session)
     }
 
-    public func recordProcessResult(generationID: UUID, result: CodexTransportResult) throws {
+    public func recordProcessResult(generationID: UUID, result: AgentTransportResult) throws {
       let context = ModelContext(container)
       guard let generation = try context.fetch(FetchDescriptor<ReviewGeneration>()).first(where: { $0.id == generationID }),
         let operationID = generation.operationID,
@@ -134,11 +134,13 @@
         message.deliveryStateRawValue = outcome == .turnCompleted ? "committed" : outcome.rawValue
         message.updatedAt = Date()
       }
-      let projectedMessages = result.state.messages.isEmpty && outcome == .turnCompleted
+      // Claude's review answer is the JSON document itself, so the chat records a fixed
+      // summary instead of echoing the document or a partial fragment of it.
+      let projectedMessages = outcome == .turnCompleted
         ? [ProjectedMessage(
             itemID: "papertrail-review-completed", draft: nil,
             committed: ReviewChatProjection.completedFallback)]
-        : result.state.messages
+        : []
       for projected in projectedMessages {
         let message = ChatMessage(
           id: ChatMessageIdentity.assistant(operationID: operationID, itemID: projected.itemID),
@@ -355,7 +357,7 @@
       return generations.map(\.id)
     }
 
-    private static func persisted(_ outcome: CodexOperationOutcome) -> ProcessOutcome {
+    private static func persisted(_ outcome: AgentOperationOutcome) -> ProcessOutcome {
       switch outcome {
       case .turnCompleted: .turnCompleted
       case .failed: .failed

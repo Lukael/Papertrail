@@ -15,19 +15,19 @@ final class ReviewGenerationController: ObservableObject {
   let paperID: UUID
   let paths: LibraryPaths
   let model: String?
-  let reasoningEffort: CodexReasoningEffort
+  let reasoningEffort: AgentReasoningEffort
   private let store: any ReviewGenerationStore
   private let conversationProvider: () throws -> ReviewConversationSnapshot
   private let activityLog: AppActivityLog
-  private let executableProvider: CodexExecutableProvider
-  private var cancellation: CodexCancellationToken?
+  private let executableProvider: AgentExecutableProvider
+  private var cancellation: AgentCancellationToken?
 
   #if PPR_PORTABLE_SCHEMA
     convenience init(
       paperID: UUID, paths: LibraryPaths, store: DurableModelStore, model: String?,
-      reasoningEffort: CodexReasoningEffort,
+      reasoningEffort: AgentReasoningEffort,
       activityLog: AppActivityLog,
-      executableProvider: CodexExecutableProvider
+      executableProvider: AgentExecutableProvider
     ) {
       self.init(
         paperID: paperID,
@@ -42,9 +42,9 @@ final class ReviewGenerationController: ObservableObject {
   #else
     convenience init(
       paperID: UUID, paths: LibraryPaths, container: ModelContainer, model: String?,
-      reasoningEffort: CodexReasoningEffort,
+      reasoningEffort: AgentReasoningEffort,
       activityLog: AppActivityLog,
-      executableProvider: CodexExecutableProvider
+      executableProvider: AgentExecutableProvider
     ) {
       self.init(
         paperID: paperID,
@@ -64,10 +64,10 @@ final class ReviewGenerationController: ObservableObject {
     paths: LibraryPaths,
     reviewStore: any ReviewGenerationStore,
     model: String?,
-    reasoningEffort: CodexReasoningEffort,
+    reasoningEffort: AgentReasoningEffort,
     conversationProvider: @escaping () throws -> ReviewConversationSnapshot,
     activityLog: AppActivityLog,
-    executableProvider: CodexExecutableProvider
+    executableProvider: AgentExecutableProvider
   ) {
     self.paperID = paperID
     self.paths = paths
@@ -95,7 +95,7 @@ final class ReviewGenerationController: ObservableObject {
     guard !isRunning else { return }
     let conversation: ReviewConversationSnapshot
     do {
-      // Capture at the button click boundary so messages sent while Codex is resolving
+      // Capture at the button click boundary so messages sent while Claude Code is resolving
       // belong to the next synthesis rather than changing this one underneath it.
       conversation = try conversationProvider()
     } catch {
@@ -104,15 +104,15 @@ final class ReviewGenerationController: ObservableObject {
       return
     }
     isRunning = true
-    status = "Checking Codex CLI compatibility…"
+    status = "Checking Claude Code compatibility…"
     Task {
       do {
         let executable = try await executableProvider.executableURL()
         beginGeneration(conversation: conversation, executable: executable)
       } catch {
         status =
-          "Codex CLI could not be resolved. Existing reviews remain readable: \(error.localizedDescription)"
-        activityLog.append(level: .error, status ?? "Codex CLI resolution failed.")
+          "Claude Code could not be used. Existing reviews remain readable: \(error.localizedDescription)"
+        activityLog.append(level: .error, status ?? "Claude Code resolution failed.")
         isRunning = false
       }
     }
@@ -124,11 +124,11 @@ final class ReviewGenerationController: ObservableObject {
     let identity = ReviewGenerationIdentity()
     status = "Synthesizing the paper and conversation into a new review version…"
     activityLog.append(level: .info, status ?? "Review generation started.")
-    let token = CodexCancellationToken()
+    let token = AgentCancellationToken()
     cancellation = token
     let predecessor = generations.last?.id
     let service = ReviewGenerationService(paths: paths, store: store)
-    let progressHandler: @Sendable (CodexLiveProgress) -> Void = { [weak self] update in
+    let progressHandler: @Sendable (AgentLiveProgress) -> Void = { [weak self] update in
       Task { @MainActor [weak self] in self?.appendLiveProgress(update) }
     }
     Task {
@@ -162,14 +162,17 @@ final class ReviewGenerationController: ObservableObject {
     }
   }
 
-  private func appendLiveProgress(_ update: CodexLiveProgress) {
+  private func appendLiveProgress(_ update: AgentLiveProgress) {
     let level: AppActivityLogLevel = update.kind == .reasoning ? .debug : .info
+    // The response is the raw review JSON; the log notes its arrival instead of echoing it.
+    let message =
+      update.kind == .response ? "Received the review document; validating it…" : update.text
     if let itemID = update.itemID {
       activityLog.upsert(
-        key: "review:\(paperID.uuidString):\(itemID)", source: .codex, level: level,
-        message: update.text)
+        key: "review:\(paperID.uuidString):\(itemID)", source: .agent, level: level,
+        message: message)
     } else {
-      activityLog.append(source: .codex, level: level, update.text)
+      activityLog.append(source: .agent, level: level, message)
     }
   }
 

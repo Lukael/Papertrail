@@ -3,7 +3,7 @@ import Foundation
 public struct ChatTurnResult: Sendable {
   public let operationID: UUID
   public let sessionID: UUID
-  public let outcome: CodexOperationOutcome
+  public let outcome: AgentOperationOutcome
   public let replacementSessionID: UUID?
 }
 
@@ -16,14 +16,14 @@ public actor PaperChatCoordinator {
   private let paths: LibraryPaths
   private let executableURL: URL
   private let model: String?
-  private let reasoningEffort: CodexReasoningEffort?
-  private let transport: DirectProcessCodexTransport
+  private let reasoningEffort: AgentReasoningEffort?
+  private let transport: DirectProcessAgentTransport
   private let runtimeRegistry: PaperChatRuntimeRegistry
 
   public init(
     store: any PaperChatStore, paths: LibraryPaths, executableURL: URL, model: String? = nil,
-    reasoningEffort: CodexReasoningEffort? = nil,
-    transport: DirectProcessCodexTransport = .init(),
+    reasoningEffort: AgentReasoningEffort? = nil,
+    transport: DirectProcessAgentTransport = .init(),
     runtimeRegistry: PaperChatRuntimeRegistry = .init()
   ) {
     self.store = store
@@ -41,7 +41,7 @@ public actor PaperChatCoordinator {
 
   public func send(
     paperID: UUID, text: String,
-    progress: (@Sendable (CodexLiveProgress) -> Void)? = nil
+    progress: (@Sendable (AgentLiveProgress) -> Void)? = nil
   ) async throws -> ChatTurnResult {
     let session = try await ensureInitialSession(paperID: paperID)
     return try await executeTurn(
@@ -50,7 +50,7 @@ public actor PaperChatCoordinator {
 
   public func retry(
     paperID: UUID, failedOperationID: UUID, text: String,
-    progress: (@Sendable (CodexLiveProgress) -> Void)? = nil
+    progress: (@Sendable (AgentLiveProgress) -> Void)? = nil
   ) async throws -> ChatTurnResult {
     let session = try await ensureInitialSession(paperID: paperID)
     return try await executeTurn(
@@ -147,7 +147,7 @@ public actor PaperChatCoordinator {
   private func executeTurn(
     paperID: UUID, session: ChatSessionRecord, text: String,
     retryPredecessorID: UUID? = nil,
-    progress: (@Sendable (CodexLiveProgress) -> Void)? = nil
+    progress: (@Sendable (AgentLiveProgress) -> Void)? = nil
   ) async throws -> ChatTurnResult {
     let workspace = try paths.url(forRelativePath: session.workspaceRelativePath)
     let operationID = UUID()
@@ -159,7 +159,7 @@ public actor PaperChatCoordinator {
       userMessageID: UUID(), journalRelativePath: journalRelative,
       retryPredecessorID: retryPredecessorID)
     let key = ChatQueueKey(sessionID: session.id, workspaceURL: workspace)
-    let cancellation = CodexCancellationToken()
+    let cancellation = AgentCancellationToken()
 
     do {
       return try await runtimeRegistry.run(
@@ -171,18 +171,21 @@ public actor PaperChatCoordinator {
         try store.assertCurrentSession(
           paperID: paperID, sessionID: current.id,
           externalThreadID: current.externalThreadID)
-        let result: CodexTransportResult
+        let result: AgentTransportResult
         do {
           result = try await Task.detached(priority: .userInitiated) {
-            let bootstrap = try String(
-              contentsOf: workspace.appendingPathComponent("bootstrap.txt"), encoding: .utf8)
-            let isNew = current.externalThreadID == nil
-            let prompt = isNew ? bootstrap + "\nUSER_TURN:\n" + prepared.prompt : prepared.prompt
-            let invocation = try CodexInvocation(
+            // A resumed Claude session already holds the paper text from its first turn.
+            let prompt =
+              current.externalThreadID == nil
+              ? try ChatBootstrapBuilder.firstTurnPrompt(
+                workspaceURL: workspace, userPrompt: prepared.prompt)
+              : prepared.prompt
+            let invocation = try AgentInvocation(
               executableURL: executableURL,
-              kind: current.externalThreadID.map(CodexInvocation.Kind.resume) ?? .new,
+              kind: current.externalThreadID.map { .resume(sessionID: $0) } ?? .new,
+              systemPrompt: PaperChatSystemPromptBuilder().prompt(),
               prompt: prompt, workingDirectory: workspace, model: model,
-              reasoningEffort: reasoningEffort, ignoreUserConfiguration: true)
+              reasoningEffort: reasoningEffort)
             let journal = try OperationJournal(directoryURL: operationDirectory)
             return try transport.execute(
               invocation, journal: journal, cancellation: cancellation, progress: progress)
@@ -190,11 +193,11 @@ public actor PaperChatCoordinator {
         } catch {
           throw error
         }
-        try CodexOperationResultStore(directoryURL: operationDirectory).write(
-          CodexOperationResultV1(
+        try AgentOperationResultStore(directoryURL: operationDirectory).write(
+          AgentOperationResultV1(
             operationID: operationID, journalByteCount: journalSize(at: operationDirectory),
             state: result.state, exitStatus: result.exitStatus,
-            terminationReason: CodexTerminationReason(result.terminationReason),
+            terminationReason: AgentTerminationReason(result.terminationReason),
             retryDisposition: result.retryDisposition))
         do {
           try store.applyTransportResult(operationID: operationID, result: result)
@@ -202,7 +205,7 @@ public actor PaperChatCoordinator {
           // Keep the operation running so launch reconciliation can apply the durable result.
           throw DurableResultAwaitingCommit(underlying: error)
         }
-        if let thread = result.state.externalThreadID {
+        if let thread = result.state.externalThreadID, result.state.outcome == .turnCompleted {
           try await runtimeRegistry.bind(externalThreadID: thread, to: key)
         }
         return ChatTurnResult(

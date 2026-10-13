@@ -411,7 +411,7 @@ enum Gate0GHarness {
     let banner = NSView(frame: frame); banner.wantsLayer = true; banner.layer?.cornerRadius = 10
     banner.layer?.backgroundColor = NSColor.systemOrange.withAlphaComponent(0.10).cgColor
     label("Web review · local files only · JavaScript/bridges/network off", in: banner, frame: NSRect(x: 16, y: 31, width: frame.width - 32, height: 18), size: 12, color: .labelColor, weight: .semibold)
-    label("Codex child process · workspace writes · accepted residual reads, network, and process spawning", in: banner, frame: NSRect(x: 16, y: 9, width: frame.width - 32, height: 18), size: 12, color: .systemOrange, weight: .semibold)
+    label("Claude Code child process · no tools · app-supplied input and app-written output", in: banner, frame: NSRect(x: 16, y: 9, width: frame.width - 32, height: 18), size: 12, color: .systemOrange, weight: .semibold)
     root.addSubview(banner)
   }
 
@@ -425,7 +425,7 @@ enum Gate0GHarness {
   static func chatPane(frame: NSRect) -> NSView {
     let view = pane(frame: frame, title: "Paper-scoped chat")
     message("You", "What is the main limitation?", y: frame.height - 160, in: view, accent: true)
-    message("Codex", "The synthetic sample supports internal checks, but does not establish external validity.", y: frame.height - 300, in: view, accent: false)
+    message("Claude", "The synthetic sample supports internal checks, but does not establish external validity.", y: frame.height - 300, in: view, accent: false)
     let retry = NSButton(title: "Retry interrupted message", target: nil, action: nil); retry.frame = NSRect(x: 18, y: 68, width: 210, height: 34); view.addSubview(retry)
     label("Messages and lineage are stored locally.", in: view, frame: NSRect(x: 18, y: 34, width: frame.width - 36, height: 20), size: 12, color: .secondaryLabelColor)
     return view

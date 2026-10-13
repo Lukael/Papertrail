@@ -21,7 +21,6 @@ private enum PDFSelectionPurpose {
 }
 
 struct PaperLibraryView: View {
-  @Environment(\.scenePhase) private var scenePhase
   let launchRepairMessage: String?
   @StateObject private var controller: PaperLibraryController
   @State private var selectedPaperID: UUID?
@@ -280,13 +279,13 @@ struct PaperLibraryView: View {
     .toolbar {
       ToolbarItemGroup(placement: .automatic) {
         Menu {
-          ForEach(controller.codexModels) { model in
+          ForEach(controller.agentModels) { model in
             Menu {
-              ForEach([CodexReasoningEffort.automatic] + model.supportedEfforts) { effort in
+              ForEach([AgentReasoningEffort.automatic] + model.supportedEfforts) { effort in
                 Button {
-                  controller.selectCodexModel(model, effort: effort)
+                  controller.selectAgentModel(model, effort: effort)
                 } label: {
-                  if controller.codexModel == model && controller.codexEffort == effort {
+                  if controller.agentModel == model && controller.agentEffort == effort {
                     Label(effort.title, systemImage: "checkmark")
                   } else {
                     Text(effort.title)
@@ -294,32 +293,24 @@ struct PaperLibraryView: View {
                 }
               }
             } label: {
-              if controller.codexModel == model {
+              if controller.agentModel == model {
                 Label(model.title, systemImage: "checkmark")
               } else {
                 Text(model.title)
               }
             }
           }
-          Divider()
-          Button(controller.isRefreshingCodexModels ? "Updating models…" : "Refresh models") {
-            Task { await controller.refreshCodexModels(force: true) }
-          }
-          .disabled(controller.isRefreshingCodexModels)
-          if let error = controller.codexModelsError {
-            Text(error)
-          }
         } label: {
-          Text("\(controller.codexModel.title) · \(controller.codexEffort.title)")
+          Text("\(controller.agentModel.title) · \(controller.agentEffort.title)")
             .lineLimit(1)
             .fixedSize(horizontal: true, vertical: false)
             .frame(minWidth: 170, alignment: .leading)
         }
         .fixedSize(horizontal: true, vertical: false)
         .accessibilityLabel(
-          "Codex model \(controller.codexModel.title), reasoning effort \(controller.codexEffort.title)")
+          "Claude model \(controller.agentModel.title), effort \(controller.agentEffort.title)")
         .help(
-          "Models update automatically. Choose a model and its supported reasoning effort for new operations."
+          "Choose a Claude model family and effort level for new operations. Claude Code resolves each family to its newest model."
         )
         Button("App information", systemImage: "info.circle") {
           showsAppInformation.toggle()
@@ -360,19 +351,6 @@ struct PaperLibraryView: View {
       }
     }
     .animation(.easeOut(duration: 0.16), value: showsAppInformation)
-    .task { await controller.refreshCodexModels() }
-    .task(id: scenePhase) {
-      guard scenePhase == .active else { return }
-      while !Task.isCancelled {
-        do { try await Task.sleep(for: .seconds(900)) } catch { return }
-        await controller.refreshCodexModels()
-      }
-    }
-    .onChange(of: scenePhase) { _, phase in
-      if phase == .active {
-        Task { await controller.refreshCodexModels() }
-      }
-    }
   }
 
   private var appInformationPanel: some View {
@@ -402,9 +380,9 @@ struct PaperLibraryView: View {
         Label("Review renderer", systemImage: "network.slash")
           .font(.callout.weight(.semibold))
         Text("Local-only WebView · JavaScript, bridges, remote resources, downloads, and popups are disabled.")
-        Label("Codex process", systemImage: "exclamationmark.shield")
+        Label("Claude process", systemImage: "exclamationmark.shield")
           .font(.callout.weight(.semibold))
-        Text("Workspace writes are allowed with the accepted residual read, network, and process-spawning authority.")
+        Text("Headless Claude Code runs with no tools, MCP servers, or user settings. The app supplies paper text on input and writes every output itself.")
       }
       .foregroundStyle(.secondary)
     }

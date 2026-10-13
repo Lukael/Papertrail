@@ -27,8 +27,8 @@ final class PaperChatController: ObservableObject {
   private let paths: LibraryPaths
   private let runtimeRegistry: PaperChatRuntimeRegistry
   private let model: String?
-  private let reasoningEffort: CodexReasoningEffort
-  private let executableProvider: CodexExecutableProvider
+  private let reasoningEffort: AgentReasoningEffort
+  private let executableProvider: AgentExecutableProvider
   private let activityLog: AppActivityLog
   var onUserMessage: ((Date) -> Void)?
   private var loadTask: Task<Void, Never>?
@@ -41,8 +41,8 @@ final class PaperChatController: ObservableObject {
     init(
       paperID: UUID, paths: LibraryPaths, store: DurableModelStore,
       runtimeRegistry: PaperChatRuntimeRegistry, model: String?,
-      reasoningEffort: CodexReasoningEffort, activityLog: AppActivityLog,
-      executableProvider: CodexExecutableProvider
+      reasoningEffort: AgentReasoningEffort, activityLog: AppActivityLog,
+      executableProvider: AgentExecutableProvider
     ) {
       self.paperID = paperID
       self.store = PortablePaperChatStore(store: store)
@@ -58,8 +58,8 @@ final class PaperChatController: ObservableObject {
     init(
       paperID: UUID, paths: LibraryPaths, container: ModelContainer,
       runtimeRegistry: PaperChatRuntimeRegistry, model: String?,
-      reasoningEffort: CodexReasoningEffort, activityLog: AppActivityLog,
-      executableProvider: CodexExecutableProvider
+      reasoningEffort: AgentReasoningEffort, activityLog: AppActivityLog,
+      executableProvider: AgentExecutableProvider
     ) {
       self.paperID = paperID
       self.store = SwiftDataPaperChatStore(container: container)
@@ -86,7 +86,7 @@ final class PaperChatController: ObservableObject {
         deliveryState: "sending", createdAt: Date()))
     liveAssistant = ChatLiveAssistantState(reasoning: "Thinking…", response: nil)
     liveRevision += 1
-    status = "Codex is answering in this paper's private session…"
+    status = "Claude is answering in this paper's private session…"
     activityLog.append(level: .info, status ?? "Chat request started.")
     Task {
       do {
@@ -197,7 +197,7 @@ final class PaperChatController: ObservableObject {
     }
   }
 
-  private func progressHandler() -> @Sendable (CodexLiveProgress) -> Void {
+  private func progressHandler() -> @Sendable (AgentLiveProgress) -> Void {
     { [weak self] update in
       Task { @MainActor [weak self] in
         guard let self else { return }
@@ -214,7 +214,7 @@ final class PaperChatController: ObservableObject {
         }
         self.liveRevision += 1
         self.activityLog.upsert(
-          key: "chat-\(update.itemID ?? update.kind.rawValue)", source: .codex,
+          key: "chat-\(update.itemID ?? update.kind.rawValue)", source: .agent,
           message: update.text)
       }
     }

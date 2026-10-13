@@ -84,20 +84,20 @@ public final class OperationJournal: @unchecked Sendable {
     }
   }
 
-  public func replay() throws -> CodexEventProjector {
+  public func replay() throws -> AgentEventProjector {
     let recovered = try replayAcceptedPrefix()
     if let error = recovered.error { throw error }
     return recovered.projector
   }
 
-  public func replayAcceptedPrefix() throws -> (projector: CodexEventProjector, error: Error?) {
+  public func replayAcceptedPrefix() throws -> (projector: AgentEventProjector, error: Error?) {
     let data = try readVerifiedBytes()
-    var projector = CodexEventProjector()
-    var framer = CodexJSONLFramer(maximumRecordBytes: recordLimit)
+    var projector = AgentEventProjector()
+    var framer = AgentJSONLFramer(maximumRecordBytes: recordLimit)
     let batch = framer.consume(data)
     for raw in batch.records {
       do {
-        try projector.project(CodexEvent(raw: raw))
+        try projector.project(AgentEvent(raw: raw))
       } catch {
         return (projector, error)
       }

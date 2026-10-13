@@ -1,15 +1,15 @@
 import Foundation
 import PapertrailCore
 
-private struct BoundedTransport: CodexTransport {
+private struct BoundedTransport: AgentTransport {
   let timeout: TimeInterval
   func execute(
-    _ invocation: CodexInvocation, journal: OperationJournal,
-    cancellation: CodexCancellationToken
-  ) throws -> CodexTransportResult {
-    try DirectProcessCodexTransport().execute(
+    _ invocation: AgentInvocation, journal: OperationJournal,
+    cancellation: AgentCancellationToken
+  ) throws -> AgentTransportResult {
+    try DirectProcessAgentTransport().execute(
       invocation, journal: journal, cancellation: cancellation,
-      policy: CodexTransportPolicy(timeout: timeout))
+      policy: AgentTransportPolicy(timeout: timeout))
   }
 }
 
@@ -93,7 +93,7 @@ private struct ServiceEvidence: Codable {
     let withConversation = CommandLine.arguments.last == "--with-conversation"
     let expectedArgumentCount = withConversation ? 6 : 5
     guard CommandLine.arguments.count == expectedArgumentCount else {
-      throw Failure("usage: Gate0FHarness <repo> <evidence-root> <codex> <timeout-seconds> [--with-conversation]")
+      throw Failure("usage: Gate0FHarness <repo> <evidence-root> <claude> <timeout-seconds> [--with-conversation]")
     }
     let repository = URL(fileURLWithPath: CommandLine.arguments[1]).standardizedFileURL
     let evidenceRoot = URL(fileURLWithPath: CommandLine.arguments[2]).standardizedFileURL

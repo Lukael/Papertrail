@@ -34,7 +34,7 @@ public struct ChatJournalRecovery: Sendable {
   public let externalThreadID: String?
   public let messages: [RecoveredAssistantMessage]
   public let corruptTail: Bool
-  public let operationResult: CodexOperationResultV1?
+  public let operationResult: AgentOperationResultV1?
 }
 
 public enum ChatLaunchRecovery {
@@ -65,10 +65,10 @@ public enum ChatLaunchRecovery {
         id: ChatMessageIdentity.assistant(operationID: operationID, itemID: $0.itemID),
         itemID: $0.itemID, committed: $0.committed ?? "", draft: $0.draft)
     }
-    let operationResult: CodexOperationResultV1?
+    let operationResult: AgentOperationResultV1?
     var resultCorrupt = false
     do {
-      operationResult = try CodexOperationResultStore(directoryURL: journalDirectoryURL).read(
+      operationResult = try AgentOperationResultStore(directoryURL: journalDirectoryURL).read(
         expectedOperationID: operationID,
         expectedJournalByteCount: OperationJournal(directoryURL: journalDirectoryURL).sizeBytes)
     } catch {

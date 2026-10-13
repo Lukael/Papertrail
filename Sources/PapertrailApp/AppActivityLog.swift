@@ -2,7 +2,7 @@ import SwiftUI
 
 enum AppActivityLogSource: String, Sendable {
   case app = "App"
-  case codex = "Codex"
+  case agent = "Claude"
 }
 
 enum AppActivityLogLevel: String, Sendable {
@@ -110,7 +110,7 @@ struct ActivityLogBar: View {
       }
       .labelStyle(.iconOnly)
       .buttonStyle(.borderless)
-      .help("Show app and Codex log history")
+      .help("Show app and Claude log history")
       .popover(isPresented: $showsHistory, arrowEdge: .top) {
         ActivityLogHistoryView(log: log, onClose: { showsHistory = false })
       }
@@ -120,11 +120,11 @@ struct ActivityLogBar: View {
     .background(.bar)
     .overlay(alignment: .top) { Divider() }
     .accessibilityElement(children: .contain)
-    .accessibilityLabel("App and Codex activity log")
+    .accessibilityLabel("App and Claude activity log")
   }
 
   private func symbol(for entry: AppActivityLogEntry) -> String {
-    if entry.source == .codex { return "terminal" }
+    if entry.source == .agent { return "terminal" }
     return switch entry.level {
     case .debug: "ladybug"
     case .info: "info.circle"
@@ -155,7 +155,7 @@ private struct ActivityLogHistoryView: View {
         Label("Activity log", systemImage: "list.bullet.rectangle")
           .font(.headline)
         Spacer()
-        Text("App + Codex")
+        Text("App + Claude")
           .font(.caption)
           .foregroundStyle(.secondary)
         Button("Close", systemImage: "xmark") { onClose() }
@@ -204,6 +204,6 @@ private struct ActivityLogHistoryView: View {
     }
     .frame(width: 660, height: 330)
     .accessibilityElement(children: .contain)
-    .accessibilityLabel("App and Codex log history")
+    .accessibilityLabel("App and Claude log history")
   }
 }

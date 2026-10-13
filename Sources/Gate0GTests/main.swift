@@ -164,19 +164,19 @@ enum Gate0GTests {
     let review = try appSource("ReviewGenerationController.swift")
     try expect(
       !workspace.contains("ReviewLiveActivityView")
-        && !workspace.contains("Live Codex activity"),
-      "Review panel still renders local live Codex activity")
+        && !workspace.contains("Live Codex activity") && !workspace.contains("Live Claude activity"),
+      "Review panel still renders local live agent activity")
     for contract in [
       "ActivityLogBar(log: controller.activityLog)", "Show log history",
-      "ActivityLogHistoryView", "App + Codex", "maximumEntryCount = 500",
-      "App and Codex activity log",
+      "ActivityLogHistoryView", "App + Claude", "maximumEntryCount = 500",
+      "App and Claude activity log",
     ] {
       try expect(
         workspace.contains(contract) || log.contains(contract),
         "global activity log lacks \(contract)")
     }
-    for contract in ["activityLog.upsert", "source: .codex", "appendLiveProgress"] {
-      try expect(review.contains(contract), "Codex progress is not routed to global log: \(contract)")
+    for contract in ["activityLog.upsert", "source: .agent", "appendLiveProgress"] {
+      try expect(review.contains(contract), "Claude progress is not routed to global log: \(contract)")
     }
   }
 
@@ -204,7 +204,7 @@ enum Gate0GTests {
   static func testChatComposerCopy() async throws {
     let source = try appSource("PaperWorkspaceViews.swift")
     try expect(!source.contains("Paper context included"), "chat composer repeats paper context")
-    try expect(!source.contains("if let status = controller.status"), "chat composer renders Codex lifecycle status")
+    try expect(!source.contains("if let status = controller.status"), "chat composer renders Claude lifecycle status")
     try expect(
       source.contains("HStack(alignment: .bottom, spacing: 10)")
         && source.contains(".lineLimit(1...6)"),
@@ -230,10 +230,10 @@ enum Gate0GTests {
     for contract in [
       "Button(\"App information\", systemImage: \"info.circle\")",
       "Show storage and security information", "Local-only WebView",
-      "accepted residual read, network, and process-spawning authority",
+      "Headless Claude Code runs with no tools, MCP servers, or user settings.",
       ".frame(minWidth: 170, alignment: .leading)",
       ".fixedSize(horizontal: true, vertical: false)",
-      "Codex model \\(controller.codexModel.title), reasoning effort \\(controller.codexEffort.title)",
+      "Claude model \\(controller.agentModel.title), effort \\(controller.agentEffort.title)",
     ] {
       try expect(workspace.contains(contract), "toolbar information disclosure lacks \(contract)")
     }
@@ -242,7 +242,7 @@ enum Gate0GTests {
         of: "private var paperVisibility", range: headerStart.upperBound..<workspace.endIndex)
     else { throw Gate0GFailure(description: "workspace header could not be inspected") }
     let header = String(workspace[headerStart.lowerBound..<headerEnd.lowerBound])
-    for removed in ["Private local storage", "Web review:", "Codex child:", "Button(\"Storage\""] {
+    for removed in ["Private local storage", "Web review:", "Codex child:", "Claude child:", "Button(\"Storage\""] {
       try expect(!header.contains(removed), "workspace header still exposes \(removed)")
     }
     let allAppSources = try FileManager.default.contentsOfDirectory(atPath: "Sources/PapertrailApp")

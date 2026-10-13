@@ -3,7 +3,7 @@ import SwiftUI
 import PapertrailCore
 import WebKit
 // In-memory fixture: the production View is compiled by verify-chat-scroll.py.
-// No library files, Codex sessions, or user messages are accessed.
+// No library files, Claude sessions, or user messages are accessed.
 struct ChatLiveAssistantState { var reasoning: String?; var response: String? }
 @MainActor final class PaperChatController: ObservableObject {
   @Published var messages: [ChatMessageRecord] = []
