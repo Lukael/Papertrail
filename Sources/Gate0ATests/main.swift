@@ -19,6 +19,7 @@ enum Gate0ATests {
     let tests: [(String, () throws -> Void)] = [
       ("invocation boundary", testInvocationBoundary),
       ("minimal environment", testMinimalEnvironment),
+      ("dynamic model catalog", testModelCatalog),
       ("JSONL framing", testFraming),
       ("projection and terminal reconciliation", testProjection),
       ("journal permissions, caps, replay", testJournal),
@@ -57,6 +58,135 @@ enum Gate0ATests {
     }
   }
 
+  private static func testModelCatalog() throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let executable = root.appendingPathComponent("codex")
+    func script(_ body: String) throws {
+      try Data(("#!/bin/sh\n" + body + "\n").utf8).write(to: executable)
+      try FileManager.default.setAttributes(
+        [.posixPermissions: 0o700], ofItemAtPath: executable.path)
+    }
+    let wire =
+      #"{"model":"gpt-future","displayName":"Future model","hidden":false,"isDefault":true,"defaultReasoningEffort":"medium","supportedReasoningEfforts":[{"reasoningEffort":"medium","description":"Medium"},{"reasoningEffort":"future","description":"Future"}]}"#
+    let model = try JSONDecoder().decode(CodexModelDescriptor.self, from: Data(wire.utf8))
+    try expect(model.supportedReasoningEfforts.last?.rawValue == "future", "future effort was lost")
+    try expect(
+      JSONDecoder().decode(CodexModelDescriptor.self, from: JSONEncoder().encode(model)) == model,
+      "cached catalog did not round-trip")
+    for identifier in [
+      "", "bad/model", "gpt\";touch /tmp/pwned", String(repeating: "a", count: 129),
+    ] {
+      var object = try JSONSerialization.jsonObject(with: Data(wire.utf8)) as! [String: Any]
+      object["model"] = identifier
+      do {
+        _ = try JSONDecoder().decode(
+          CodexModelDescriptor.self, from: JSONSerialization.data(withJSONObject: object))
+        throw TestFailure(description: "invalid catalog model accepted")
+      } catch is DecodingError {}
+    }
+    let second = wire.replacingOccurrences(of: "gpt-future", with: "gpt-second")
+      .replacingOccurrences(of: #""isDefault":true"#, with: #""isDefault":false"#)
+    let hidden = wire.replacingOccurrences(of: "gpt-future", with: "gpt-hidden")
+      .replacingOccurrences(of: #""hidden":false"#, with: #""hidden":true"#)
+    let prelude = """
+      [ "$1" = app-server ] && [ "$2" = --listen ] && [ "$3" = stdio:// ] && [ "$4" = -c ] && [ "$5" = 'model_provider="openai"' ] || exit 1
+      [ "$PWD" != '\(FileManager.default.currentDirectoryPath)' ] || exit 1
+      IFS= read -r initialize
+      printf '%s\\n' '{"method":"notice","params":{}}' '{"id":1,"result":{}}'
+      IFS= read -r initialized
+      IFS= read -r first
+      """ + "\n"
+    try script(
+      prelude + """
+        printf '%s\\n' '{"id":2,"result":{"data":[\(wire),\(hidden)],"nextCursor":"next"}}'
+        IFS= read -r second
+        case "$second" in *'"cursor":"next"'*) ;; *) exit 1 ;; esac
+        printf '%s\\n' '{"method":"notice"}' '{"id":3,"result":{"data":[\(wire),\(second)],"nextCursor":null}}'
+        """)
+    let catalog = try CodexModelCatalog().fetch(executableURL: executable, timeout: 2)
+    try expect(
+      catalog.map(\.model) == ["gpt-future", "gpt-second"],
+      "paging, filtering, or deduplication failed")
+    try expect(
+      catalog.first?.isDefault == true && catalog.last?.isDefault == false,
+      "default metadata changed")
+    try script(
+      prelude
+        + "printf '%s\\n' '{\"id\":2,\"error\":{\"code\":401,\"message\":\"Login required; bearer secret-token\"}}'\n"
+    )
+    do {
+      _ = try CodexModelCatalog().fetch(executableURL: executable, timeout: 1)
+      throw TestFailure(description: "RPC error accepted")
+    } catch let error as CodexModelCatalogError {
+      try expect(
+        error.localizedDescription.contains("401")
+          && error.localizedDescription.contains("Login required"), "actionable RPC error was lost")
+      try expect(
+        !error.localizedDescription.contains("secret-token"), "RPC error leaked credentials")
+    }
+    try script("printf '%s\\n' 'Invalid catalog configuration; bearer startup-token' >&2\nexit 1")
+    do {
+      _ = try CodexModelCatalog().fetch(executableURL: executable, timeout: 1)
+      throw TestFailure(description: "startup error accepted")
+    } catch let error as CodexModelCatalogError {
+      try expect(
+        error.localizedDescription.contains("Invalid catalog configuration"),
+        "startup stderr was lost")
+      try expect(
+        !error.localizedDescription.contains("startup-token"), "startup stderr leaked credentials")
+    }
+    for response in [
+      #"{"id":2,"error":{"code":-1,"message":"failure"}}"#,
+      #"{"id":7,"result":{"data":[],"nextCursor":null}}"#,
+      #"{"id":2,"result":{"data":[],"nextCursor":null}}"#,
+      "not JSON",
+      #"{"id":2,"result":{"data":[{"model":"bad/model"}],"nextCursor":null}}"#,
+    ] {
+      try script(prelude + "printf '%s\\n' '\(response)'\n")
+      do {
+        _ = try CodexModelCatalog().fetch(executableURL: executable, timeout: 1)
+        throw TestFailure(description: "invalid catalog response accepted")
+      } catch is TestFailure {
+        throw TestFailure(description: "invalid catalog response accepted")
+      } catch {}
+    }
+    try script(
+      prelude + """
+        printf '%s\\n' '{"id":2,"result":{"data":[\(wire)],"nextCursor":"same"}}'
+        IFS= read -r second
+        printf '%s\\n' '{"id":3,"result":{"data":[\(wire)],"nextCursor":"same"}}'
+        """)
+    do {
+      _ = try CodexModelCatalog().fetch(executableURL: executable, timeout: 1)
+      throw TestFailure(description: "repeated cursor accepted")
+    } catch CodexModelCatalogError.invalidResponse {}
+    let oversized = root.appendingPathComponent("oversized")
+    try Data(String(repeating: "x", count: 1_048_577).utf8).write(to: oversized)
+    try script(prelude + "/bin/cat '\(oversized.path)'\n")
+    do {
+      _ = try CodexModelCatalog().fetch(executableURL: executable, timeout: 2)
+      throw TestFailure(description: "oversized catalog frame accepted")
+    } catch CodexModelCatalogError.invalidResponse {}
+    let pidFile = root.appendingPathComponent("pid")
+    try script(
+      """
+      echo $$ > '\(pidFile.path)'
+      trap '' TERM
+      while :; do :; done
+      """)
+    let start = Date()
+    do {
+      _ = try CodexModelCatalog().fetch(executableURL: executable, timeout: 0.1)
+      throw TestFailure(description: "hung server accepted")
+    } catch CodexModelCatalogError.timedOut {}
+    try expect(Date().timeIntervalSince(start) < 2, "catalog timeout did not bound cleanup")
+    let pid = try String(contentsOf: pidFile, encoding: .utf8).trimmingCharacters(
+      in: .whitespacesAndNewlines)
+    try expect(Darwin.kill(Int32(pid)!, 0) == -1 && errno == ESRCH, "catalog server was not reaped")
+  }
+
   private static func testInvocationBoundary() throws {
     let executable = URL(fileURLWithPath: "/usr/bin/true")
     let workspace = URL(fileURLWithPath: NSTemporaryDirectory())
@@ -70,6 +200,31 @@ enum Gate0ATests {
       "new argument shape changed")
     try expect(new.standardInput == Data(prompt.utf8), "prompt was not preserved on stdin")
     try expect(!new.arguments.joined().contains("touch"), "untrusted prompt reached arguments")
+    for kind in [CodexInvocation.Kind.new, .resume(threadID: "thread-123")] {
+      let automatic = try CodexInvocation(
+        executableURL: executable, kind: kind, prompt: prompt, workingDirectory: workspace,
+        reasoningEffort: .automatic)
+      try expect(
+        !automatic.arguments.contains(where: { $0.hasPrefix("model_reasoning_effort") }),
+        "automatic reasoning unexpectedly overrode CLI configuration")
+      let future = try CodexInvocation(
+        executableURL: executable, kind: kind, prompt: prompt, workingDirectory: workspace,
+        reasoningEffort: CodexReasoningEffort(rawValue: "ultra")!)
+      try expect(
+        future.arguments.contains(#"model_reasoning_effort="ultra""#),
+        "future reasoning effort was not encoded as literal TOML")
+    }
+    for effort in [
+      "", "high\"", "high\n", "$(touch /tmp/pwned)", "high;touch",
+      String(repeating: "a", count: 33),
+    ] {
+      try expect(CodexReasoningEffort(rawValue: effort) == nil, "unsafe reasoning token accepted")
+      do {
+        _ = try JSONDecoder().decode(
+          CodexReasoningEffort.self, from: JSONEncoder().encode(effort))
+        throw TestFailure(description: "unsafe cached reasoning token accepted")
+      } catch is DecodingError {}
+    }
     let selectedModel = try CodexInvocation(
       executableURL: executable, kind: .new, prompt: prompt, workingDirectory: workspace,
       model: "gpt-5.5", reasoningEffort: .medium)

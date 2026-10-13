@@ -21,6 +21,7 @@ private enum PDFSelectionPurpose {
 }
 
 struct PaperLibraryView: View {
+  @Environment(\.scenePhase) private var scenePhase
   let launchRepairMessage: String?
   @StateObject private var controller: PaperLibraryController
   @State private var selectedPaperID: UUID?
@@ -279,12 +280,11 @@ struct PaperLibraryView: View {
     .toolbar {
       ToolbarItemGroup(placement: .automatic) {
         Menu {
-          ForEach(CodexModelSelection.allCases) { model in
+          ForEach(controller.codexModels) { model in
             Menu {
-              ForEach(CodexReasoningEffort.allCases) { effort in
+              ForEach([CodexReasoningEffort.automatic] + model.supportedEfforts) { effort in
                 Button {
-                  controller.codexModel = model
-                  controller.codexEffort = effort
+                  controller.selectCodexModel(model, effort: effort)
                 } label: {
                   if controller.codexModel == model && controller.codexEffort == effort {
                     Label(effort.title, systemImage: "checkmark")
@@ -301,6 +301,14 @@ struct PaperLibraryView: View {
               }
             }
           }
+          Divider()
+          Button(controller.isRefreshingCodexModels ? "Updating models…" : "Refresh models") {
+            Task { await controller.refreshCodexModels(force: true) }
+          }
+          .disabled(controller.isRefreshingCodexModels)
+          if let error = controller.codexModelsError {
+            Text(error)
+          }
         } label: {
           Text("\(controller.codexModel.title) · \(controller.codexEffort.title)")
             .lineLimit(1)
@@ -310,7 +318,9 @@ struct PaperLibraryView: View {
         .fixedSize(horizontal: true, vertical: false)
         .accessibilityLabel(
           "Codex model \(controller.codexModel.title), reasoning effort \(controller.codexEffort.title)")
-        .help("Choose a Codex model, then its reasoning effort, for new reviews and chats.")
+        .help(
+          "Models update automatically. Choose a model and its supported reasoning effort for new operations."
+        )
         Button("App information", systemImage: "info.circle") {
           showsAppInformation.toggle()
         }
@@ -350,6 +360,19 @@ struct PaperLibraryView: View {
       }
     }
     .animation(.easeOut(duration: 0.16), value: showsAppInformation)
+    .task { await controller.refreshCodexModels() }
+    .task(id: scenePhase) {
+      guard scenePhase == .active else { return }
+      while !Task.isCancelled {
+        do { try await Task.sleep(for: .seconds(900)) } catch { return }
+        await controller.refreshCodexModels()
+      }
+    }
+    .onChange(of: scenePhase) { _, phase in
+      if phase == .active {
+        Task { await controller.refreshCodexModels() }
+      }
+    }
   }
 
   private var appInformationPanel: some View {
@@ -899,8 +922,9 @@ private struct PaperChatView: View {
 
   private var chatComposer: some View {
     HStack(alignment: .bottom, spacing: 10) {
+      // Disabling the active field can re-enter SwiftUI through IME teardown.
+      // The controller blocks duplicate sends while the next draft stays editable.
       ChatComposerField(text: $controller.input, onSubmit: controller.send)
-        .disabled(controller.isRunning)
 
       if controller.isRunning {
         Button("Cancel", systemImage: "stop.fill", role: .destructive) {

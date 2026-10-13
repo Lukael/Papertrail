@@ -17,22 +17,31 @@ final class PaperLibraryController: ObservableObject {
   }
   @Published var notice: String?
   let activityLog = AppActivityLog()
+  @Published private(set) var codexModels = CodexModelSelection.initialChoices()
+  @Published private(set) var isRefreshingCodexModels = false
+  @Published private(set) var codexModelsError: String?
+  private var lastCodexModelRefresh: Date?
   @Published var codexModel = CodexModelSelection.load() {
     didSet {
+      guard oldValue != codexModel else { return }
       codexModel.save()
       reviewControllers.removeAll()
       chatControllers.removeAll()
-      notice = "New Codex operations will use \(codexModel.title) at \(codexEffort.title) effort."
-      activityLog.append(level: .info, notice ?? "Codex model changed.")
+      activityLog.append(
+        level: .info, "New Codex operations will use \(codexModel.title) at \(codexEffort.title) effort.")
     }
   }
-  @Published var codexEffort = CodexReasoningEffort.load() {
+  @Published var codexEffort =
+    CodexModelSelection.load() == .automatic
+    ? CodexReasoningEffort.automatic : CodexReasoningEffort.load()
+  {
     didSet {
+      guard oldValue != codexEffort else { return }
       codexEffort.save()
       reviewControllers.removeAll()
       chatControllers.removeAll()
-      notice = "New Codex operations will use \(codexModel.title) at \(codexEffort.title) effort."
-      activityLog.append(level: .info, notice ?? "Codex effort changed.")
+      activityLog.append(
+        level: .info, "New Codex operations will use \(codexModel.title) at \(codexEffort.title) effort.")
     }
   }
   let paths: LibraryPaths
@@ -65,6 +74,70 @@ final class PaperLibraryController: ObservableObject {
       activityLog.append(level: .success, "Paper library opened with \(papers.count) paper(s).")
     }
   #endif
+
+  func selectCodexModel(_ model: CodexModelSelection, effort: CodexReasoningEffort) {
+    guard !hasActiveCodexOperations else {
+      notice = "Wait for the current Codex operation to finish before changing models."
+      return
+    }
+    guard effort == .automatic || model.supportedEfforts.contains(effort) else { return }
+    codexModel = model
+    codexEffort = effort
+  }
+
+  private var hasActiveCodexOperations: Bool {
+    reviewControllers.values.contains(where: \.isRunning)
+      || chatControllers.values.contains(where: \.isRunning)
+  }
+
+  func refreshCodexModels(force: Bool = false) async {
+    guard !isRefreshingCodexModels,
+      force || lastCodexModelRefresh.map({ Date().timeIntervalSince($0) >= 900 }) ?? true
+    else { return }
+    isRefreshingCodexModels = true
+    lastCodexModelRefresh = Date()
+    defer { isRefreshingCodexModels = false }
+    do {
+      let executable = try await codexExecutableProvider.executableURL()
+      let models = try await Task.detached(priority: .utility) {
+        try CodexModelCatalog().fetch(executableURL: executable)
+      }.value
+      guard !Task.isCancelled else { return }
+      CodexModelSelection.cache(models)
+      codexModelsError = nil
+      // A catalog update must not detach a running review or chat from its controls.
+      let choices = [CodexModelSelection.automatic] + models.map(CodexModelSelection.init)
+      let selected = choices.first(where: { $0 == codexModel })
+      if selected == nil
+        || (codexEffort != .automatic && selected?.supportedEfforts.contains(codexEffort) != true)
+      {
+        while hasActiveCodexOperations {
+          try await Task.sleep(for: .seconds(1))
+        }
+      }
+      codexModels = choices
+      if let selected = choices.first(where: { $0 == codexModel }) {
+        codexModel = selected
+        if codexEffort != .automatic && !selected.supportedEfforts.contains(codexEffort) {
+          codexEffort = .automatic
+        }
+      } else {
+        let previous = codexModel.title
+        codexModel = .automatic
+        codexEffort = .automatic
+        activityLog.append(
+          source: .codex, level: .warning,
+          "\(previous) is no longer in the Codex model list. New operations will use Codex default.")
+      }
+      activityLog.append(source: .codex, level: .success, "Updated \(models.count) Codex models.")
+    } catch is CancellationError {
+      return
+    } catch {
+      codexModelsError = "Could not refresh models. The last saved list is still available."
+      activityLog.append(
+        source: .codex, level: .warning, "\(codexModelsError!) \(error.localizedDescription)")
+    }
+  }
 
   func prepareImport(from url: URL) throws -> PreparedPDFImport {
     activityLog.append(level: .info, "Preparing PDF import: \(url.lastPathComponent)")

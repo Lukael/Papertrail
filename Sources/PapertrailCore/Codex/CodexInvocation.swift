@@ -23,11 +23,38 @@ public enum CodexInvocationError: Error, Equatable, CustomStringConvertible, Loc
   public var errorDescription: String? { description }
 }
 
-public enum CodexReasoningEffort: String, CaseIterable, Identifiable, Sendable {
-  case low
-  case medium
-  case high
-  case xhigh
+public struct CodexReasoningEffort: RawRepresentable, Codable, Hashable, Identifiable, Sendable {
+  public let rawValue: String
+
+  public init?(rawValue: String) {
+    guard !rawValue.isEmpty, rawValue.utf8.count <= 32,
+      rawValue.utf8.allSatisfy({
+        (97...122).contains($0) || (48...57).contains($0) || $0 == 45 || $0 == 95
+      })
+    else { return nil }
+    self.rawValue = rawValue
+  }
+
+  public static let automatic = Self(rawValue: "automatic")!
+  public static let low = Self(rawValue: "low")!
+  public static let medium = Self(rawValue: "medium")!
+  public static let high = Self(rawValue: "high")!
+  public static let xhigh = Self(rawValue: "xhigh")!
+
+  public init(from decoder: any Decoder) throws {
+    let container = try decoder.singleValueContainer()
+    let value = try container.decode(String.self)
+    guard let effort = Self(rawValue: value) else {
+      throw DecodingError.dataCorruptedError(
+        in: container, debugDescription: "Invalid reasoning effort.")
+    }
+    self = effort
+  }
+
+  public func encode(to encoder: any Encoder) throws {
+    var container = encoder.singleValueContainer()
+    try container.encode(rawValue)
+  }
 
   public var id: String { rawValue }
 
@@ -77,7 +104,10 @@ public struct CodexInvocation: Equatable, Sendable {
     } else {
       modelArguments = []
     }
-    let effortArguments = reasoningEffort.map { ["--config", $0.configurationValue] } ?? []
+    let effortArguments =
+      reasoningEffort.flatMap {
+        $0 == .automatic ? nil : ["--config", $0.configurationValue]
+      } ?? []
     let isolationArguments = ignoreUserConfiguration ? ["--ignore-user-config"] : []
     let resumeWorkspaceArguments: [String]
     switch kind {
@@ -144,12 +174,15 @@ public struct CodexInvocation: Equatable, Sendable {
       cursor += 2
     }
     if cursor + 1 < arguments.count && arguments[cursor] == "--config" {
-      if CodexReasoningEffort.allCases.contains(where: {
-        $0.configurationValue == arguments[cursor + 1]
-      }) {
+      let configuration = arguments[cursor + 1]
+      if configuration.hasPrefix("model_reasoning_effort") {
+        let prefix = #"model_reasoning_effort=""#
+        guard configuration.hasPrefix(prefix), configuration.hasSuffix("\""),
+          let effort = CodexReasoningEffort(
+            rawValue: String(configuration.dropFirst(prefix.count).dropLast())),
+          effort != .automatic
+        else { throw CodexInvocationError.invalidReasoningEffort }
         cursor += 2
-      } else if arguments[cursor + 1].hasPrefix("model_reasoning_effort") {
-        throw CodexInvocationError.invalidReasoningEffort
       }
     }
     if isResume, cursor + 1 < arguments.count, arguments[cursor] == "--config" {

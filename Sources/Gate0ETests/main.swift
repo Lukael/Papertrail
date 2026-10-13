@@ -640,7 +640,8 @@ enum Gate0ETests {
     ] { try expect(app.contains(required), "UI controller lacks \(required)") }
     for required in [
       "PaperChatView", "ForEach(controller.messages.suffix(from: firstVisibleIndex))", "Cancel", "Refresh context",
-      "Button(\"Retry\")", "CodexModelSelection.allCases", "CodexReasoningEffort.allCases",
+      "Button(\"Retry\")", "controller.codexModels", "model.supportedEfforts",
+      "controller.selectCodexModel", "controller.refreshCodexModels(force: true)",
       "Menu {", "chatComposerPanel", ".safeAreaInset(edge: .bottom", "ChatMessageRow",
       ".frame(maxWidth: .infinity, alignment: isUser ? .trailing : .leading)",
       ".padding(.bottom, 40)", "ChatLiveResponseRow", "Thinking", "liveRevision",

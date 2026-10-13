@@ -1,40 +1,60 @@
 import Foundation
 import PapertrailCore
 
-enum CodexModelSelection: String, CaseIterable, Identifiable {
-  case automatic
-  case gpt55 = "gpt-5.5"
-  case gpt54 = "gpt-5.4"
-  case gpt56Sol = "gpt-5.6-sol"
-  case gpt56Terra = "gpt-5.6-terra"
-  case gpt56Luna = "gpt-5.6-luna"
+struct CodexModelSelection: Identifiable, Equatable, Sendable {
+  let rawValue: String
+  let title: String
+  let supportedEfforts: [CodexReasoningEffort]
 
+  static let automatic = Self(rawValue: "automatic", title: "Codex default", supportedEfforts: [])
   static let defaultsKey = "selectedCodexModel"
+  private static let cacheKey = "codexModelCatalog"
 
   var id: String { rawValue }
-
   var commandLineValue: String? { self == .automatic ? nil : rawValue }
 
-  var title: String {
-    switch self {
-    case .automatic: "Codex default"
-    case .gpt55: "GPT-5.5"
-    case .gpt54: "GPT-5.4"
-    case .gpt56Sol: "GPT-5.6 Sol"
-    case .gpt56Terra: "GPT-5.6 Terra"
-    case .gpt56Luna: "GPT-5.6 Luna"
-    }
+  init(model: CodexModelDescriptor) {
+    rawValue = model.model
+    title = model.displayName
+    supportedEfforts = model.supportedReasoningEfforts.filter { $0 != .automatic }
   }
 
-  static func load() -> Self {
-    let value = UserDefaults.standard.string(forKey: defaultsKey)
-    // Upgrade the initial preference from the former CLI-default mode so all new work uses
-    // the requested stable model profile without requiring the user to reselect it.
-    guard let value, value != automatic.rawValue else { return .gpt56Terra }
-    return Self(rawValue: value) ?? .gpt56Terra
+  private init(rawValue: String, title: String, supportedEfforts: [CodexReasoningEffort]) {
+    self.rawValue = rawValue
+    self.title = title
+    self.supportedEfforts = supportedEfforts
   }
 
-  func save() { UserDefaults.standard.set(rawValue, forKey: Self.defaultsKey) }
+  static func == (lhs: Self, rhs: Self) -> Bool { lhs.rawValue == rhs.rawValue }
+
+  static func load(defaults: UserDefaults = .standard) -> Self {
+    guard let value = defaults.string(forKey: defaultsKey), value != automatic.rawValue,
+      CodexInvocation.isValidModelIdentifier(value)
+    else { return .automatic }
+    return cachedModels(defaults: defaults).first(where: { $0.model == value }).map(Self.init)
+      ?? Self(rawValue: value, title: value, supportedEfforts: [])
+  }
+
+  static func initialChoices(defaults: UserDefaults = .standard) -> [Self] {
+    var models = [Self.automatic] + cachedModels(defaults: defaults).map(Self.init)
+    let selected = load(defaults: defaults)
+    if !models.contains(selected) { models.append(selected) }
+    return models
+  }
+
+  static func cachedModels(defaults: UserDefaults = .standard) -> [CodexModelDescriptor] {
+    guard let data = defaults.data(forKey: cacheKey), data.count <= 4_194_304,
+      let models = try? JSONDecoder().decode([CodexModelDescriptor].self, from: data)
+    else { return [] }
+    return models.filter { !$0.hidden }
+  }
+
+  static func cache(_ models: [CodexModelDescriptor], defaults: UserDefaults = .standard) {
+    guard let data = try? JSONEncoder().encode(models), data.count <= 4_194_304 else { return }
+    defaults.set(data, forKey: cacheKey)
+  }
+
+  func save(defaults: UserDefaults = .standard) { defaults.set(rawValue, forKey: Self.defaultsKey) }
 }
 
 extension CodexReasoningEffort {
@@ -42,17 +62,19 @@ extension CodexReasoningEffort {
 
   var title: String {
     switch self {
+    case .automatic: "Model default"
     case .low: "Low"
     case .medium: "Medium"
     case .high: "High"
     case .xhigh: "Extra High"
+    default: rawValue.replacingOccurrences(of: "_", with: " ").capitalized
     }
   }
 
-  static func load() -> Self {
-    guard let value = UserDefaults.standard.string(forKey: defaultsKey) else { return .medium }
-    return Self(rawValue: value) ?? .medium
+  static func load(defaults: UserDefaults = .standard) -> Self {
+    guard let value = defaults.string(forKey: defaultsKey) else { return .automatic }
+    return Self(rawValue: value) ?? .automatic
   }
 
-  func save() { UserDefaults.standard.set(rawValue, forKey: Self.defaultsKey) }
+  func save(defaults: UserDefaults = .standard) { defaults.set(rawValue, forKey: Self.defaultsKey) }
 }

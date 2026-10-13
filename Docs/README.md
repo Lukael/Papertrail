@@ -27,6 +27,16 @@ done
 2026-09-10 수동 문서 생성 시나리오에서는 D/E/F/G/H 총 91개 그룹을 통과했습니다.
 A/C는 이 91개 집계에 포함되지 않습니다.
 
+## Codex 모델 목록과 선택값
+
+```sh
+python3 Scripts/verify-codex-models.py
+python3 Scripts/verify-codex-models.py --codex /opt/homebrew/bin/codex
+```
+
+첫 명령은 모델 조회·페이지 병합·타임아웃·오류 정보 마스킹과 선택값·캐시 보존을 검사합니다.
+두 번째 명령은 설치된 CLI의 실제 모델 목록도 조회합니다. 모델 추론은 실행하지 않습니다.
+
 ## WebKit 메시지 스크롤 회귀 검사
 
 macOS 로그인 세션에서 아래 명령으로 실제 WebKit의 메시지 내부 스크롤을 검사합니다.
@@ -92,7 +102,7 @@ sh Scripts/verify-pdf-search.sh
 python3 Scripts/verify-chat-scroll.py --layout-only
 ```
 
-PDF 검사는 생성한 임시 PDF에서 대소문자 무시 검색·페이지 간 결과 이동·검색 해제·문서 전환을 확인합니다.
+PDF 검사는 생성한 임시 PDF에서 대소문자 무시 검색·페이지 간 결과 이동·검색 해제·문서 전환을 확인합니다. Ctrl+휠·트랙패드 확대·축소, 배율 제한과 읽기 상태 알림, 일반 스크롤·PDF 밖 입력 유지도 검사합니다.
 채팅 검사는 실제 입력창 코드에 Shift+Enter를 보내 커서 위치 줄바꿈과 전송 방지를 확인하고, Enter가 한 번 전송되는지 검사합니다. 실제 Codex에는 요청하지 않습니다.
 
 ## 실제 Codex 생성

@@ -22,7 +22,7 @@ Papertrail은 로컬 PDF 논문을 보관하고, 논문별 대화를 이어 가�
 | 영속 저장소 | SwiftData 앱 빌드, portable JSON 저장소 테스트 경로 |
 | Codex 실행 | 로컬 `codex exec` 자식 프로세스 |
 | 앱 번들 | `Papertrail.app` |
-| 기본 Codex 설정 | GPT-5.6 Terra / Medium |
+| 기본 Codex 설정 | Codex default / Model default (기존 명시적 선택값 보존) |
 
 앱 데이터의 기본 위치는 `~/Library/Application Support/Papertrail`이다. 기존
 `PersonalPaperReview` 저장소는 대상 폴더가 아직 없을 때만 안전하게 이전한다. 대상이
@@ -47,7 +47,17 @@ Papertrail은 로컬 PDF 논문을 보관하고, 논문별 대화를 이어 가�
 1. 모델을 선택한다.
 2. 선택한 모델의 하위 메뉴에서 reasoning effort를 선택한다.
 
-지원 Effort는 `Low`, `Medium`, `High`, `Extra High`다. 선택값은 UserDefaults에 저장되며
+모델과 지원 reasoning effort 목록은 동일한 로컬 CLI의 `app-server` → `model/list`에서
+페이지별로 조회한다. 앱 시작·활성화 및 활성 상태에서 15분 간격으로 갱신하고, 메뉴의
+**Refresh models**는 즉시 다시 조회한다. CLI 자체의 카탈로그 캐시는 우회하지 않는다.
+조회는 추론 작업을 시작하지 않으며 숨겨진 모델은 제외한다. 프로세스 실행 시간, 응답 크기와
+페이지 수를 제한하고 종료 시 자식 프로세스를 회수한다. 인증은 CLI에서 관리한다.
+
+모델 ID, 표시 이름과 지원 Effort는 코드에 고정하지 않는다. **Model default** 선택 시에는
+reasoning effort 인자를 생략한다. 선택값과 마지막 유효 카탈로그는 UserDefaults에 저장되어
+재실행·조회 실패 후에도 유지된다. 성공적으로 조회한 목록에서 기존 모델이 사라지면
+**Codex default**로, 기존 강도가 지원되지 않으면 **Model default**로 전환한다.
+실행 중에는 수동 선택 변경을 차단하고, 자동 전환은 작업 종료 후 적용한다.
 이후의 문서 생성, 새 채팅, 채팅 재개와 재시도에 적용된다.
 
 모델 선택 버튼 옆의 정보 버튼은 로컬 저장 경로, 보존 정책, Review WebView 제한과 Codex

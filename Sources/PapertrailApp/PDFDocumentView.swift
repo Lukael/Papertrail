@@ -153,6 +153,7 @@ private struct PDFViewRepresentable: NSViewRepresentable {
     private var searchResults: [PDFSelection] = []
     private var selectedSearchIndex = -1
     private var searchGeneration = 0
+    private var scrollMonitor: Any?
 
     init(
       onSearchResultCountChanged: @escaping (Int) -> Void,
@@ -173,6 +174,16 @@ private struct PDFViewRepresentable: NSViewRepresentable {
 
     func attach(to view: PDFView) {
       observedView = view
+      // PDFKit's nested scroll view consumes wheel events before PDFView sees them.
+      scrollMonitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) {
+        [weak self] event in
+        guard let self, let view = self.observedView,
+          let window = view.window, event.window === window,
+          let content = window.contentView
+        else { return event }
+        return self.routeScroll(
+          event, hitView: content.hitTest(content.convert(event.locationInWindow, from: nil)))
+      }
       NotificationCenter.default.addObserver(
         self, selector: #selector(readingStateDidChange(_:)),
         name: .PDFViewPageChanged, object: view)
@@ -187,7 +198,20 @@ private struct PDFViewRepresentable: NSViewRepresentable {
     func detach() {
       searchGeneration += 1
       searchedDocument?.cancelFindString()
+      if let scrollMonitor { NSEvent.removeMonitor(scrollMonitor) }
+      scrollMonitor = nil
+      observedView = nil
       NotificationCenter.default.removeObserver(self)
+    }
+
+    func routeScroll(_ event: NSEvent, hitView: NSView?) -> NSEvent? {
+      guard event.modifierFlags.contains(.control),
+        let view = observedView, let hitView, hitView.isDescendant(of: view)
+      else { return event }
+      let sensitivity = event.hasPreciseScrollingDeltas ? 0.01 : 0.1
+      let scale = view.scaleFactor * exp(event.scrollingDeltaY * sensitivity)
+      view.scaleFactor = min(max(scale, view.minScaleFactor), view.maxScaleFactor)
+      return nil
     }
 
     func apply(url: URL, pageIndex: Int, scale: Double, to view: PDFView) {
@@ -283,7 +307,8 @@ private struct PDFViewRepresentable: NSViewRepresentable {
       onChange(document.index(for: page), view.scaleFactor)
     }
 
-    deinit {
+    isolated deinit {
+      if let scrollMonitor { NSEvent.removeMonitor(scrollMonitor) }
       NotificationCenter.default.removeObserver(self)
     }
   }

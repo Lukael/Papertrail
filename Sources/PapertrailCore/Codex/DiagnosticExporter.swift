@@ -10,6 +10,17 @@ public struct DiagnosticExporter: Sendable {
   public func writeRedactedStderr(
     _ data: Data, to url: URL, homePath: String? = ProcessInfo.processInfo.environment["HOME"]
   ) throws {
+    let text = redactedStderr(data, homePath: homePath)
+    try FileManager.default.createDirectory(
+      at: url.deletingLastPathComponent(), withIntermediateDirectories: true,
+      attributes: [.posixPermissions: 0o700])
+    try Data(text.utf8).write(to: url, options: .atomic)
+    try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+  }
+
+  public func redactedStderr(
+    _ data: Data, homePath: String? = ProcessInfo.processInfo.environment["HOME"]
+  ) -> String {
     let bounded = data.prefix(maximumStderrBytes)
     var text = String(decoding: bounded, as: UTF8.self)
     if let homePath, !homePath.isEmpty {
@@ -22,10 +33,6 @@ public struct DiagnosticExporter: Sendable {
     for pattern in patterns {
       text = text.replacingOccurrences(of: pattern, with: "<REDACTED>", options: .regularExpression)
     }
-    try FileManager.default.createDirectory(
-      at: url.deletingLastPathComponent(), withIntermediateDirectories: true,
-      attributes: [.posixPermissions: 0o700])
-    try Data(text.utf8).write(to: url, options: .atomic)
-    try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+    return text
   }
 }

@@ -49,6 +49,7 @@
 - Keep the chat composer action-focused: do not repeat paper-context or Codex lifecycle status prose beside the input; route operational status to the global activity log.
 - Keep diagnostics global: Review content stays focused and does not repeat process, structure, evidence, or progress text; the bottom log combines app and Codex lifecycle events. Only actionable load failures remain attached to the review.
 - Keep secondary disclosures out of the workspace header; place storage and security information beside the model selector in the global toolbar.
+- Populate the model menu and its reasoning efforts from the Codex CLI catalog. Refresh at launch, foreground activation and every 15 minutes while active; retain saved choices and the last catalog on failure. Offer Refresh models and Model default in the existing menu.
 - Keep the selected model and reasoning effort fully readable in the toolbar; do not replace or truncate the current selection with an icon or ellipsis when space is available.
 - Tradeoffs: prefer native SwiftUI behavior and readable adaptive layouts over pixel-specific web UI imitation.
 
@@ -74,6 +75,7 @@
 - Target standard: macOS native accessibility defaults.
 - Keyboard/focus behavior: native list, menu, picker, and text field behavior. The chat composer sends with Return and inserts a newline at the caret with Shift+Return, preserving native selection and IME handling.
 - PDF search: Command+F opens and focuses a top-right field. Typing only edits the draft; Enter submits the query, and repeated Enter advances to the next match. Previous/next buttons wrap through highlighted text matches; Escape closes search and clears highlights. Search stays within the current document and resets on document changes.
+- PDF zoom: Control+scroll over the PDF changes its scale within 10–1600%, with mouse-wheel and trackpad sensitivity adjusted to their input units. Preserve ordinary scrolling and other panes; save zoom through the existing reading-state path.
 - Contrast/readability: semantic foreground/background colors.
 - Screen-reader semantics: each message exposes an explicit You or Papertrail assistant identity; user messages additionally expose their question position and every rail marker announces its question number and content.
 - Reduced motion and sensory considerations: message identity does not depend on animation or color alone.
@@ -97,7 +99,7 @@
 - Transcript navigation: scrolling updates the active question anchor; previous, next, and trailing-rail marker selection move focus to a question and visibly emphasize it.
 - Destructive success: paper deletion is reported complete only after its app-owned directory is absent.
 - Disabled: send is disabled for empty input or unavailable chat; Generate document is disabled while a generation is running.
-- Offline/slow network: the running state keeps the composer visible and exposes cancel.
+- Offline/slow network: the running state keeps the composer editable for the next draft and exposes cancel. The controller rejects duplicate sends. Do not disable the active native field during a SwiftUI update: input-method teardown can re-enter the view graph and freeze the window.
 
 ## Content voice
 
