@@ -24,6 +24,7 @@ public struct AgentEventProjector: Sendable {
         throw AgentEventError.missingRequiredField("session_id")
       }
       try bind(sessionID)
+      state.model = event.model
       if let tools = event.tools, !tools.isEmpty {
         throw AgentProjectionError.toolsEnabled(tools)
       }
@@ -58,6 +59,8 @@ public struct AgentEventProjector: Sendable {
 
     case "result":
       if let sessionID = event.sessionID, !sessionID.isEmpty { try bind(sessionID) }
+      state.costUSD = event.costUSD
+      state.durationMilliseconds = event.durationMilliseconds
       if event.isError == true {
         state.terminalEvents.append("result.error:\(event.subtype ?? "unknown")")
         if let text = event.resultText, !text.isEmpty {

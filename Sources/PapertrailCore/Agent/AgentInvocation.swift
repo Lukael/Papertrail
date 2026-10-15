@@ -99,6 +99,7 @@ public struct AgentInvocation: Equatable, Sendable {
     workingDirectory: URL,
     model: String? = nil,
     reasoningEffort: AgentReasoningEffort? = nil,
+    streamPartialMessages: Bool = false,
     fileManager: FileManager = .default
   ) throws {
     guard executableURL.path.hasPrefix("/") else {
@@ -125,6 +126,8 @@ public struct AgentInvocation: Equatable, Sendable {
     if let reasoningEffort, reasoningEffort != .automatic {
       arguments += ["--effort", reasoningEffort.rawValue]
     }
+    // Text deltas drive progress only; the transport never journals them.
+    if streamPartialMessages { arguments += ["--include-partial-messages"] }
     switch kind {
     case .ephemeral:
       arguments += ["--no-session-persistence"]
@@ -174,6 +177,9 @@ public struct AgentInvocation: Equatable, Sendable {
         effort != .automatic
       else { throw AgentInvocationError.invalidReasoningEffort }
       cursor += 2
+    }
+    if cursor < arguments.count, arguments[cursor] == "--include-partial-messages" {
+      cursor += 1
     }
     let tail = Array(arguments.dropFirst(cursor))
     switch tail.count {

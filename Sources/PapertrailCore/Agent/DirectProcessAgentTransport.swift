@@ -448,10 +448,12 @@ private final class ProjectionBox: @unchecked Sendable {
       let batch = framer.consume(data)
       for raw in batch.records {
         let event = try AgentEvent(raw: raw)
-        // Thinking-token counters carry no projected state and arrive per streamed chunk, so
-        // they update progress without an fsync'd journal record each.
-        if event.isThinkingTokenEstimate {
-          if let tokens = event.estimatedTokens,
+        // Streamed deltas and thinking-token counters carry no projected state and arrive per
+        // chunk, so they update progress without an fsync'd journal record each.
+        if event.isStreamingDelta {
+          if let text = event.partialText, !text.isEmpty {
+            updates.append(.init(kind: .draft, text: text))
+          } else if let tokens = event.estimatedTokens,
             let update = AgentLiveProgress.thinkingUpdate(
               estimatedTokens: tokens, previouslyReported: &reportedThinkingTokens)
           {

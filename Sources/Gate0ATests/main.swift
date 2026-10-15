@@ -111,9 +111,10 @@ enum Gate0ATests {
     let resume = try AgentInvocation(
       executableURL: executable, kind: .resume(sessionID: "session-123"),
       systemPrompt: testSystemPrompt, prompt: prompt, workingDirectory: workspace,
-      reasoningEffort: .xhigh)
+      reasoningEffort: .xhigh, streamPartialMessages: true)
     try expect(
-      resume.arguments == isolation + ["--effort", "xhigh", "--resume", "session-123"],
+      resume.arguments
+        == isolation + ["--effort", "xhigh", "--include-partial-messages", "--resume", "session-123"],
       "resume argument shape changed")
     let selected = try AgentInvocation(
       executableURL: executable, kind: .new, systemPrompt: testSystemPrompt, prompt: prompt,
@@ -169,6 +170,8 @@ enum Gate0ATests {
       isolation + ["--add-dir", "/"],
       isolation + ["--resume", "s", "--fork-session"],
       isolation + ["--no-session-persistence", "--resume", "s"],
+      isolation + ["--include-partial-messages", "--effort", "high"],
+      isolation + ["--include-partial-messages", "--include-partial-messages"],
       isolation + ["extra prompt argument"],
       Array(isolation.dropFirst(2)),
       isolation.map { $0 == "dontAsk" ? "bypassPermissions" : $0 },
@@ -249,6 +252,7 @@ enum Gate0ATests {
       printf '%s\n' '\(initEvent)'
       printf '%s\n' '{"type":"assistant","message":{"id":"M1","model":"claude-test","content":[{"type":"thinking","thinking":"checking evidence"}]},"session_id":"S1"}'
       printf '%s\n' '{"type":"stream_event","event":{"type":"content_block_delta","delta":{"text":"must-not-surface"}}}'
+      printf '%s\n' '{"type":"stream_event","event":{"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"partial-draft"}},"session_id":"S1"}'
       for tokens in 1 6 600 700 1200; do printf '{"type":"system","subtype":"thinking_tokens","estimated_tokens":%s,"session_id":"S1"}\n' "$tokens"; done
       printf '%s\n' '{"type":"assistant","message":{"id":"E1","model":"<synthetic>","content":[{"type":"text","text":"synthetic-must-not-surface"}]},"session_id":"S1"}'
       printf '%s\n' '{"type":"assistant","message":{"id":"M1","model":"claude-test","content":[{"type":"text","text":"\(longText)"}]},"session_id":"S1"}'
@@ -281,8 +285,14 @@ enum Gate0ATests {
         "Thinking… (about 1,200 tokens)",
       ], "thinking-token progress was not throttled to 500-token steps: \(thinking)")
     try expect(
-      try !String(contentsOf: journal.eventsURL, encoding: .utf8).contains("thinking_tokens"),
-      "per-chunk thinking counters were fsync'd into the journal")
+      try !String(contentsOf: journal.eventsURL, encoding: .utf8).contains("thinking_tokens")
+        && !String(contentsOf: journal.eventsURL, encoding: .utf8).contains("stream_event"),
+      "per-chunk thinking counters or text deltas were fsync'd into the journal")
+    try expect(
+      updates.contains { $0.kind == .draft && $0.text == "partial-draft" },
+      "streamed text delta was not surfaced as draft progress")
+    try expect(
+      result.state.model == "claude-test", "init model was not recorded for the run summary")
   }
 
   private static func testProjection() throws {
@@ -939,6 +949,7 @@ enum Gate0ATests {
       --system-prompt <prompt>     System prompt
       --model <model>              Model for the session
       --effort <level>             Effort level
+      --include-partial-messages   Include partial message chunks
       -r, --resume [value]         Resume a conversation
       --no-session-persistence     Disable session persistence
       -h, --help                   Display help for command

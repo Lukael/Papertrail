@@ -18,7 +18,7 @@ public struct AgentCapabilityChecker: Sendable {
   public static let requiredHelpTokens = [
     "--print", "--output-format", "stream-json", "--verbose", "--tools", "--strict-mcp-config",
     "--setting-sources", "--permission-mode", "dontAsk", "--system-prompt", "--model",
-    "--effort", "--resume", "--no-session-persistence",
+    "--effort", "--include-partial-messages", "--resume", "--no-session-persistence",
   ]
 
   public init() {}

@@ -21,6 +21,11 @@ final class ReviewGenerationController: ObservableObject {
   private let activityLog: AppActivityLog
   private let executableProvider: AgentExecutableProvider
   private var cancellation: AgentCancellationToken?
+  /// One log line per run that carries the latest progress plus elapsed time, refreshed even
+  /// while Claude is silently thinking so a long generation never looks stalled.
+  private var liveStatus = "Claude is reading the paper and planning the review"
+  private var runStartedAt: Date?
+  private var heartbeat: Task<Void, Never>?
 
   #if PPR_PORTABLE_SCHEMA
     convenience init(
@@ -126,6 +131,15 @@ final class ReviewGenerationController: ObservableObject {
     activityLog.append(level: .info, status ?? "Review generation started.")
     let token = AgentCancellationToken()
     cancellation = token
+    runStartedAt = Date()
+    liveStatus = "Claude is reading the paper and planning the review"
+    heartbeat = Task { [weak self] in
+      while !Task.isCancelled {
+        try? await Task.sleep(for: .seconds(5))
+        guard let self, self.isRunning, !Task.isCancelled else { return }
+        self.refreshLiveLine()
+      }
+    }
     let predecessor = generations.last?.id
     let service = ReviewGenerationService(paths: paths, store: store)
     let progressHandler: @Sendable (AgentLiveProgress) -> Void = { [weak self] update in
@@ -147,6 +161,7 @@ final class ReviewGenerationController: ObservableObject {
       case .success(let value):
         status = value.label + (value.structuralValidation == .passed
           ? " · source excerpts verified" : "")
+          + (value.runSummary.map { " · \($0)" } ?? "")
         activityLog.append(
           level: value.versionID == nil ? .warning : .success,
           status ?? "Review generation completed.")
@@ -156,6 +171,8 @@ final class ReviewGenerationController: ObservableObject {
         status = failureStatus
         activityLog.append(level: .error, failureStatus)
       }
+      heartbeat?.cancel()
+      heartbeat = nil
       cancellation = nil
       isRunning = false
       reload()
@@ -163,6 +180,13 @@ final class ReviewGenerationController: ObservableObject {
   }
 
   private func appendLiveProgress(_ update: AgentLiveProgress) {
+    // The service summarizes raw deltas into section progress before they reach the controller.
+    guard update.kind != .draft else { return }
+    if update.itemID == "review-draft" || update.itemID == "thinking-tokens" {
+      liveStatus = update.text
+      refreshLiveLine()
+      return
+    }
     let level: AppActivityLogLevel = update.kind == .reasoning ? .debug : .info
     // The response is the raw review JSON; the log notes its arrival instead of echoing it.
     let message =
@@ -174,6 +198,14 @@ final class ReviewGenerationController: ObservableObject {
     } else {
       activityLog.append(source: .agent, level: level, message)
     }
+  }
+
+  private func refreshLiveLine() {
+    let elapsed = Int(Date().timeIntervalSince(runStartedAt ?? Date()))
+    let clock = elapsed >= 60 ? "\(elapsed / 60)m \(elapsed % 60)s" : "\(elapsed)s"
+    activityLog.upsert(
+      key: "review:\(paperID.uuidString):live", source: .agent,
+      message: "\(liveStatus) · \(clock)")
   }
 
   func cancel() {

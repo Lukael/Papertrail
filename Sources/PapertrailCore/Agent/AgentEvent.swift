@@ -30,6 +30,10 @@ public struct AgentEvent: Equatable, Sendable {
   public let resultText: String?
   public let terminalReason: String?
   public let estimatedTokens: Int?
+  /// `text_delta` of a `stream_event` record (`--include-partial-messages`).
+  public let partialText: String?
+  public let costUSD: Double?
+  public let durationMilliseconds: Int?
   public let canonicalRaw: Data
 
   public init(raw: Data) throws {
@@ -46,6 +50,16 @@ public struct AgentEvent: Equatable, Sendable {
     resultText = object["result"] as? String
     terminalReason = object["terminal_reason"] as? String
     estimatedTokens = object["estimated_tokens"] as? Int
+    costUSD = (object["total_cost_usd"] as? NSNumber)?.doubleValue
+    durationMilliseconds = object["duration_ms"] as? Int
+    if let stream = object["event"] as? [String: Any],
+      stream["type"] as? String == "content_block_delta",
+      let delta = stream["delta"] as? [String: Any], delta["type"] as? String == "text_delta"
+    {
+      partialText = delta["text"] as? String
+    } else {
+      partialText = nil
+    }
     if let message = object["message"] as? [String: Any] {
       messageID = message["id"] as? String
       model = message["model"] as? String
@@ -59,7 +73,7 @@ public struct AgentEvent: Equatable, Sendable {
       }
     } else {
       messageID = nil
-      model = nil
+      model = object["model"] as? String
       content = []
     }
     canonicalRaw = raw
@@ -69,6 +83,9 @@ public struct AgentEvent: Equatable, Sendable {
 
   /// Claude Code streams `system/thinking_tokens` counters while the model thinks.
   public var isThinkingTokenEstimate: Bool { type == "system" && subtype == "thinking_tokens" }
+
+  /// Per-chunk records that carry no projected state: the complete `assistant` record follows.
+  public var isStreamingDelta: Bool { type == "stream_event" || isThinkingTokenEstimate }
 
   public var deduplicationKey: String {
     let digest = SHA256.hash(data: canonicalRaw).map { String(format: "%02x", $0) }.joined()
@@ -109,6 +126,10 @@ public struct AgentProjectedState: Codable, Equatable, Sendable {
   public var outcome: AgentOperationOutcome
   /// Final text of a successful `result` event; review generation parses its JSON document.
   public var resultText: String?
+  /// Model reported by `system/init`, and the turn's cost and duration from `result`.
+  public var model: String?
+  public var costUSD: Double?
+  public var durationMilliseconds: Int?
 
   public init(
     externalThreadID: String? = nil,

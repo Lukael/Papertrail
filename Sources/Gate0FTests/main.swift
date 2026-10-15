@@ -40,6 +40,9 @@ func expect(_ value: @autoclosure () -> Bool, _ message: String) throws {
       ("promotion crash points reconcile without overwriting selection", testPromotionCrashRecovery),
       ("running generation reconciliation is truthful", testReconciliation),
       ("SwiftData and app UI source paths are wired", testSourceContracts),
+      ("streamed review drafts report section progress", testDraftProgress),
+      ("a rejected document is corrected once in the same session", testCorrectionSucceeds),
+      ("a second rejection fails closed without promotion", testCorrectionFailsClosed),
     ]
     var passed = 0
     for (name, test) in tests {
@@ -365,7 +368,8 @@ func expect(_ value: @autoclosure () -> Bool, _ message: String) throws {
     try expect(
       invocation.hasPrefix(
         "[-p]\n[--output-format]\n[stream-json]\n[--verbose]\n[--tools]\n[]\n[--strict-mcp-config]\n[--setting-sources]\n[]\n[--permission-mode]\n[dontAsk]\n[--system-prompt]\n[\(ReviewPromptBuilder.marker)")
-        && invocation.hasSuffix("[--no-session-persistence]\n"),
+        && invocation.hasSuffix("[--include-partial-messages]\n")
+        && !invocation.contains("[--no-session-persistence]") && !invocation.contains("[--resume]"),
       "direct arguments changed: \(invocation.prefix(300))")
     let received = try String(contentsOf: workspace.appendingPathComponent("received-prompt.txt"), encoding: .utf8)
     try expect(
@@ -423,9 +427,9 @@ func expect(_ value: @autoclosure () -> Bool, _ message: String) throws {
     let secondInvocation = try String(
       contentsOf: secondWorkspace.appendingPathComponent("invocation.txt"), encoding: .utf8)
     try expect(
-      secondInvocation.hasSuffix("[--no-session-persistence]\n")
+      secondInvocation.hasSuffix("[--include-partial-messages]\n")
         && !secondInvocation.contains("[--resume]"),
-      "regeneration did not start an isolated, unpersisted Claude turn")
+      "regeneration did not start a new, isolated Claude session")
   }
 
   static func testFailures() throws {
@@ -874,6 +878,97 @@ func expect(_ value: @autoclosure () -> Bool, _ message: String) throws {
     }
   }
 
+  static func testDraftProgress() throws {
+    var progress = ReviewDraftProgress()
+    try expect(progress.consume(#"{"schemaVersion":1,"sum"#) == nil, "progress reported before any section")
+    try expect(
+      progress.consume(#"mary":{"id":"s","text":"x","evidenceIDs":["e1"]},"#)
+        == "Writing review: summary (1 of 11)",
+      "a key split across deltas was missed")
+    _ = progress.consume(#""method":{"overview":{"id":"m"}},"followUpQuestions":[],"#)
+    _ = progress.consume(#""evidence":[{"id":"e1","exactExcerpt":"a"},{"id":"e2","exactEx"#)
+    try expect(
+      progress.consume(#"cerpt":"b"}]"#)
+        == "Writing review: evidence (10 of 11) · 2 evidence excerpts",
+      "evidence progress or excerpt count was wrong: \(progress.statusText)")
+    try expect(
+      progress.consume(#","summary":"late"}"#) == nil && progress.sectionIndex == 9,
+      "section progress moved backwards")
+  }
+
+  static func testCorrectionSucceeds() throws {
+    let fixture = try makeFixture(); defer { try? fm.removeItem(at: fixture.root) }
+    let invalid = canonicalReviewJSON().replacingOccurrences(
+      of: "returns 1.0125 for the fixture values.", with: "returns 9.9999 for the fixture values.")
+    let executable = fixture.root.appendingPathComponent("fake-correcting")
+    try Data(correctingScript(first: invalid, second: canonicalReviewJSON()).utf8).write(to: executable)
+    try fm.setAttributes([.posixPermissions: 0o700], ofItemAtPath: executable.path)
+    let identity = ReviewGenerationIdentity()
+    let result = try fixture.service.generate(
+      paperID: fixture.paperID, executableURL: executable, identity: identity)
+    try expect(result.versionID != nil && result.selected, "corrected document was not promoted")
+    try expect(
+      result.runSummary == "claude-test · 2m 2s · $0.50 · corrected once",
+      "run summary did not total both turns: \(String(describing: result.runSummary))")
+    let workspace = fixture.paths.generationWorkspace(identity.generationID, paperID: fixture.paperID)
+    let turns = try String(contentsOf: workspace.appendingPathComponent("turns.log"), encoding: .utf8)
+    try expect(turns == "new\nthread-review\n", "correction did not resume the first session: \(turns)")
+    let prompts = try String(
+      contentsOf: workspace.appendingPathComponent("received-prompts.txt"), encoding: .utf8)
+      .components(separatedBy: "\n=====\n")
+    try expect(
+      prompts.count >= 2 && prompts[1].hasPrefix("PAPER_REVIEW_CORRECTION_V1")
+        && prompts[1].contains("excerpt-not-found") && !prompts[1].contains("<<PAPER_TEXT_BEGIN"),
+      "correction turn resent the paper or lost the findings")
+    let output = workspace.appendingPathComponent(
+      "output/operations/\(identity.operationID.uuidString.lowercased())")
+    for name in ["review.json", "review.attempt-1.json"] {
+      try expect(fm.fileExists(atPath: output.appendingPathComponent(name).path), "\(name) missing")
+    }
+    for name in ["semantic-validation.json", "semantic-validation.attempt-1.json"] {
+      try expect(fm.fileExists(atPath: workspace.appendingPathComponent(name).path), "\(name) missing")
+    }
+    let rejected = try JSONDecoder().decode(
+      StructuredReviewValidationReport.self,
+      from: Data(contentsOf: workspace.appendingPathComponent("semantic-validation.attempt-1.json")))
+    try expect(
+      rejected.findings.contains { $0.code == "excerpt-not-found" },
+      "the archived first attempt lost its findings")
+    let correctionJournal = fixture.paths.operationDirectory(
+      operationID: identity.operationID, forAgentWorkspace: workspace)
+      .appendingPathComponent("correction-1/events.jsonl")
+    let correctionEvents = try String(contentsOf: correctionJournal, encoding: .utf8)
+    try expect(
+      correctionEvents.contains("\"type\":\"result\"") && !correctionEvents.contains("stream_event"),
+      "correction turn was not journaled separately without its deltas")
+  }
+
+  static func testCorrectionFailsClosed() throws {
+    let fixture = try makeFixture(); defer { try? fm.removeItem(at: fixture.root) }
+    let invalid = canonicalReviewJSON().replacingOccurrences(
+      of: "returns 1.0125 for the fixture values.", with: "returns 9.9999 for the fixture values.")
+    let executable = fixture.root.appendingPathComponent("fake-still-invalid")
+    try Data(correctingScript(first: invalid, second: invalid).utf8).write(to: executable)
+    try fm.setAttributes([.posixPermissions: 0o700], ofItemAtPath: executable.path)
+    let identity = ReviewGenerationIdentity()
+    do {
+      _ = try fixture.service.generate(
+        paperID: fixture.paperID, executableURL: executable, identity: identity)
+      throw Failure(description: "a twice-rejected document was promoted")
+    } catch ReviewGenerationServiceError.structuredReviewFailed(let report) {
+      try expect(report.findings.contains { $0.code == "excerpt-not-found" }, "final findings lost")
+    }
+    let workspace = fixture.paths.generationWorkspace(identity.generationID, paperID: fixture.paperID)
+    let turns = try String(contentsOf: workspace.appendingPathComponent("turns.log"), encoding: .utf8)
+    try expect(turns == "new\nthread-review\n", "correction ran more than once: \(turns)")
+    let record = try fixture.reviewStore.generations(paperID: fixture.paperID).first
+    try expect(
+      record?.reviewVersionID == nil && record?.structuralValidation == .failed,
+      "failed correction left a version or running validation")
+    let selectedAfterFailure = try fixture.durable.load().papers[0].selectedReviewVersionID
+    try expect(selectedAfterFailure == nil, "failed correction changed the selected review")
+  }
+
   static func expectOrder(in source: String, _ needles: [String]) -> Bool {
     var lowerBound = source.startIndex
     for needle in needles {
@@ -943,20 +1038,55 @@ func expect(_ value: @autoclosure () -> Bool, _ message: String) throws {
     try fm.setAttributes([.posixPermissions: 0o700], ofItemAtPath: url.path)
   }
 
-  /// Emits the document the way Claude Code does: as assistant text and as the final result.
-  static func script(outputReviewJSON: String) -> String {
+  /// Base64 of the stream-json records Claude Code emits for one answer: a streamed text delta,
+  /// the complete assistant message, and the final result carrying cost and duration.
+  static func encodedAnswer(_ json: String) -> String {
     let compact = try! JSONSerialization.data(
-      withJSONObject: JSONSerialization.jsonObject(with: Data(outputReviewJSON.utf8)))
+      withJSONObject: JSONSerialization.jsonObject(with: Data(json.utf8)))
     let text = String(decoding: compact, as: UTF8.self)
+    let delta = try! JSONSerialization.data(withJSONObject: [
+      "type": "stream_event", "session_id": "thread-review",
+      "event": ["type": "content_block_delta", "index": 0,
+        "delta": ["type": "text_delta", "text": String(text.prefix(120))]],
+    ] as [String: Any])
     let assistant = try! JSONSerialization.data(withJSONObject: [
       "type": "assistant", "session_id": "thread-review",
       "message": ["id": "m", "content": [["type": "text", "text": text]]],
     ] as [String: Any])
     let result = try! JSONSerialization.data(withJSONObject: [
       "type": "result", "subtype": "success", "is_error": false, "result": text,
-      "session_id": "thread-review",
+      "session_id": "thread-review", "total_cost_usd": 0.25, "duration_ms": 61_000,
     ] as [String: Any])
-    let encoded = (assistant + Data([0x0A]) + result + Data([0x0A])).base64EncodedString()
+    return (delta + Data([0x0A]) + assistant + Data([0x0A]) + result + Data([0x0A]))
+      .base64EncodedString()
+  }
+
+  /// Answers the first turn with `first` and a `--resume` turn with `second`, logging each.
+  static func correctingScript(first: String, second: String) -> String {
+    """
+    #!/bin/sh
+    set -eu
+    cat >> received-prompts.txt
+    printf '\\n=====\\n' >> received-prompts.txt
+    resume=""
+    previous=""
+    for argument in "$@"; do
+      if [ "$previous" = "--resume" ]; then resume="$argument"; fi
+      previous="$argument"
+    done
+    printf '%s\\n' "${resume:-new}" >> turns.log
+    printf '{"type":"system","subtype":"init","session_id":"thread-review","tools":[],"model":"claude-test"}\\n'
+    if [ -n "$resume" ]; then
+      printf '%s' '\(encodedAnswer(second))' | base64 -D
+    else
+      printf '%s' '\(encodedAnswer(first))' | base64 -D
+    fi
+    """
+  }
+
+  /// Emits the document the way Claude Code does: as assistant text and as the final result.
+  static func script(outputReviewJSON: String) -> String {
+    let encoded = encodedAnswer(outputReviewJSON)
     return """
     #!/bin/sh
     set -eu

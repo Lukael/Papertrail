@@ -69,6 +69,32 @@ public struct ReviewPromptBuilder: Sendable {
       """
   }
 
+  /// Follow-up turn in the same Claude session after Papertrail rejected the returned document.
+  /// The paper text is already in the session (and its prompt cache), so only findings are sent.
+  public func correctionPrompt(findings: [StructuredReviewValidationFinding]) -> String {
+    let listed = findings.prefix(32).map { finding in
+      "- \(bounded(finding.code, bytes: 128)) at \(bounded(finding.path, bytes: 256)): \(bounded(finding.message, bytes: 512))"
+    }.joined(separator: "\n")
+    let omitted = findings.count > 32 ? "\n- …and \(findings.count - 32) more findings of the same kinds" : ""
+    return """
+      PAPER_REVIEW_CORRECTION_V1
+      Papertrail rejected the JSON document you just returned. Fix every finding below and return one complete corrected JSON document with the same schema and nothing else.
+      Findings:
+      \(listed)\(omitted)
+      For excerpt-not-found, copy the excerpt character for character from the PAPER_TEXT page you cite, or cite the page that actually contains it; if no page supports the claim, remove that evidence and the claims that depend only on it. Keep every reference consistent in both directions. Preserve valid analysis, and do not invent facts.
+      """
+  }
+
+  private func bounded(_ value: String, bytes: Int) -> String {
+    var result = ""
+    for scalar in value.unicodeScalars where scalar.value == 9 || scalar.value >= 32 {
+      let candidate = result + String(scalar)
+      if candidate.utf8.count > bytes { break }
+      result = candidate
+    }
+    return result
+  }
+
   /// Extracts the JSON document from the final result text. A surrounding Markdown fence is
   /// tolerated; any other prose makes the response invalid.
   public static func extractDocument(from resultText: String?) throws -> Data {

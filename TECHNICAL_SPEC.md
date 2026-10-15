@@ -47,12 +47,16 @@ Papertrail은 로컬 PDF 논문을 보관하고, 논문별 대화를 이어 가�
 1. 모델 계열(Claude Opus, Claude Sonnet, Claude Haiku)을 선택한다.
 2. 선택한 계열의 하위 메뉴에서 effort(Low, Medium, High, Extra High, Max)를 선택한다.
 
+툴바에는 **Chat**과 **Review** 메뉴가 따로 있다. 채팅 turn과 리뷰 문서는 각자의 모델·effort를
+쓰므로, 예를 들어 긴 근거 종합은 Opus·High로, 대화는 Sonnet·Medium으로 둘 수 있다.
+
 Claude Code CLI에는 모델 목록 조회 명령이 없으므로 앱은 `opus`, `sonnet`, `haiku` 계열
 별칭을 고정 목록으로 제공하고, CLI가 각 별칭을 계정에서 사용할 수 있는 최신 모델로 해석한다.
 현재 세 계열은 모두 `--effort low|medium|high|xhigh|max`를 지원한다. **Claude default**는
 `--model`을, **Model default**는 `--effort`를 생략해 CLI 기본값을 사용한다.
 
-선택값은 UserDefaults(`selectedClaudeModel`, `selectedClaudeReasoningEffort`)에 저장한다.
+선택값은 UserDefaults(채팅: `selectedClaudeModel`, `selectedClaudeReasoningEffort`, 리뷰:
+`selectedClaudeReviewModel`, `selectedClaudeReviewReasoningEffort`)에 저장한다.
 고정 목록 밖의 저장값(이전 Codex 모델 ID 포함)은 `--model`로 전달하지 않고 Claude default로
 되돌린다. 실행 중에는 선택 변경을 차단하며, 변경은 이후의 문서 생성, 새 채팅, 채팅 재개와
 재시도에 적용된다.
@@ -79,6 +83,14 @@ Claude Code CLI에는 모델 목록 조회 명령이 없으므로 앱은 `opus`,
 - Claude는 리뷰 JSON 문서 하나를 최종 응답으로 반환하고, 앱이 그 문서를 작업별
   `output/operations/<operation-id>/review.json`에 직접 쓴다. 이 경로에 앱보다 먼저 존재하는
   파일이나 심볼릭 링크가 있으면 결과를 거부한다.
+- 생성 turn은 `--include-partial-messages`로 실행한다. 앱은 응답 조각에서 schema의 최상위 키와
+  `exactExcerpt` 수를 읽어 "Writing review: evidence (10 of 11) · 13 evidence excerpts" 같은 진행 줄을
+  만들고, 경과 시간과 함께 5초마다 갱신한다. 조각은 저널에 기록하지 않는다.
+- 반환 문서가 형식·schema·근거 검증에서 거부되면 **같은 Claude 세션을 한 번 resume**해 오류 목록만
+  보내고 전체 수정본을 받는다. 논문 텍스트는 캐시에서 다시 읽으므로 재전송하지 않는다. 거부된 시도는
+  `review.attempt-1.json`·`semantic-validation.attempt-1.json`, 교정 turn 저널은 `correction-1/`에 보존한다.
+  두 번째도 거부되거나 경로 조작이 감지되면 승격하지 않는다.
+- 승격 시 상태와 로그에 모델·소요 시간·비용(교정 포함 합계)을 함께 기록한다.
 - JSON은 화면 표시 형식이 아니라 검증 가능한 중간 산출물이다. 앱이 허용 필드, 타입, 크기,
   참조 무결성과 논문 근거를 검사한 뒤 자체 HTML 렌더러로 동일한 화면을 결정적으로 만들기
   때문에, 모델이 임의 HTML·스크립트·원격 리소스를 직접 만들 수 없다.
@@ -167,8 +179,8 @@ Claude 진행 이벤트와 프로그램 동작 이벤트를 함께 표시한다.
 문서 생성과 논문 채팅은 서로 다른 Claude Code 세션을 사용한다. 생성 입력에 채팅
 스냅샷이 포함되더라도 세션을 공유하거나 채팅 세션을 resume하지 않는다.
 
-- 각 generation은 격리된 `reviewGeneration` 레코드와 `--no-session-persistence` 일회성 turn으로
-  실행한다. 논문 텍스트와 클릭 시점의 완료된 채팅 스냅샷을 표준 입력으로 받는다.
+- 각 generation은 격리된 `reviewGeneration` 레코드와 새 Claude 세션에서 실행한다. 논문 텍스트와
+  클릭 시점의 완료된 채팅 스냅샷을 표준 입력으로 받으며, 세션은 검증 실패 시 교정 turn에만 이어 쓴다.
 - 논문별 채팅은 하나의 현재 `paperChat` 세션을 `--resume <session-id>`로 이어 간다. 첫 turn은
   bootstrap, 검증된 논문 텍스트, 선택 리뷰의 텍스트를 함께 보내고, 이후 turn은 사용자 메시지만
   보낸다. 세션 ID는 첫 turn이 **완료된 경우에만** 저장한다. 실패·중단된 첫 turn은 이어 갈 대화를
@@ -230,6 +242,8 @@ claude -p --output-format stream-json --verbose --tools "" --strict-mcp-config
 - 작업 폴더와 상위 폴더에 CLAUDE.md를 둔 시험에서 기본 실행은 두 파일의 지시를 모두 받았고,
   `--setting-sources ""` 실행은 어느 쪽도 받지 않았다.
 - 합성 논문과 대화로 실제 리뷰 생성을 끝까지 실행해 JSON 반환, 검증, 렌더링, 승격을 확인했다.
+- 실제 논문(31쪽) 재생성에서 Sonnet·Medium 첫 응답이 인용·참조 오류 13건으로 거부되었고, 같은
+  세션 교정 turn이 이를 해결해 승격되었다(첫 turn $0.62, 교정 $0.46 · 논문 3.9만 토큰 캐시 재사용).
 - 별칭 해석은 CLI 버전에 따른다. 이 버전에서 기본 모델과 `opus`는 `claude-opus-5`, `haiku`는
   `claude-haiku-4-5`로 해석되었다.
 - 실제 라이브러리 사본(논문 11편)으로 릴리스 앱을 실행해 1회 정리(채팅 세션 6개·작업 30개 삭제,

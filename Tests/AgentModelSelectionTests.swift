@@ -25,13 +25,24 @@ enum AgentModelSelectionTests {
     precondition(
       AgentReasoningEffort.load(defaults: defaults) == .max && AgentReasoningEffort.max.title == "Max")
 
+    // Review documents keep their own selection, so changing one never moves the other.
+    let haiku = AgentModelSelection.choices[3]
+    haiku.save(defaults: defaults, key: AgentModelSelection.reviewDefaultsKey)
+    AgentReasoningEffort.high.save(defaults: defaults, key: AgentReasoningEffort.reviewDefaultsKey)
+    precondition(
+      AgentModelSelection.load(defaults: defaults, key: AgentModelSelection.reviewDefaultsKey)
+        == haiku && AgentModelSelection.load(defaults: defaults) == sonnet)
+    precondition(
+      AgentReasoningEffort.load(defaults: defaults, key: AgentReasoningEffort.reviewDefaultsKey)
+        == .high && AgentReasoningEffort.load(defaults: defaults) == .max)
+
     // Codex-era or tampered identifiers fall back to the Claude Code default and never reach --model.
     for stale in ["gpt-5.5", "gpt\"; invalid", "opus;rm", ""] {
       defaults.set(stale, forKey: AgentModelSelection.defaultsKey)
       precondition(AgentModelSelection.load(defaults: defaults) == .automatic)
     }
     print(
-      "PASS model selection: fixed Claude families, effort persistence, stale identifiers fall back"
+      "PASS model selection: fixed Claude families, separate chat/review choices, stale identifiers fall back"
     )
   }
 }

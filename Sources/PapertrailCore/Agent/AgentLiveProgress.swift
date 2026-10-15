@@ -4,6 +4,8 @@ public enum AgentLiveProgressKind: String, Equatable, Sendable {
   case status
   case reasoning
   case response
+  /// A streamed text delta; consumers that understand the response format summarize it.
+  case draft
 }
 
 public struct AgentLiveProgress: Equatable, Sendable {

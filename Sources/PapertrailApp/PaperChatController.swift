@@ -199,6 +199,8 @@ final class PaperChatController: ObservableObject {
 
   private func progressHandler() -> @Sendable (AgentLiveProgress) -> Void {
     { [weak self] update in
+      // Chat turns do not request partial messages; ignore any stray deltas.
+      guard update.kind != .draft else { return }
       Task { @MainActor [weak self] in
         guard let self else { return }
         var live = self.liveAssistant ?? ChatLiveAssistantState()
@@ -211,6 +213,8 @@ final class PaperChatController: ObservableObject {
         case .response:
           live.response = update.text
           self.liveAssistant = live
+        case .draft:
+          break
         }
         self.liveRevision += 1
         self.activityLog.upsert(
