@@ -5,6 +5,8 @@ public struct ChatTurnResult: Sendable {
   public let sessionID: UUID
   public let outcome: AgentOperationOutcome
   public let replacementSessionID: UUID?
+  /// Claude Code's explanation when the turn did not complete, such as a refusal or login error.
+  public let failureDetail: String?
 }
 
 public actor PaperChatCoordinator {
@@ -210,7 +212,7 @@ public actor PaperChatCoordinator {
         }
         return ChatTurnResult(
           operationID: operationID, sessionID: current.id, outcome: result.state.outcome,
-          replacementSessionID: nil)
+          replacementSessionID: nil, failureDetail: result.state.failureDetail)
       }
     } catch let pending as DurableResultAwaitingCommit {
       throw pending.underlying

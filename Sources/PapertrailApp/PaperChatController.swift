@@ -231,7 +231,8 @@ final class PaperChatController: ObservableObject {
   }
 
   static func statusText(for result: ChatTurnResult) -> String {
-    ChatOutcomePresentation.message(
+    let message = ChatOutcomePresentation.message(
       outcome: result.outcome, replacementCompleted: result.replacementSessionID != nil)
+    return result.failureDetail.map { "\(message) Claude Code: \($0)" } ?? message
   }
 }

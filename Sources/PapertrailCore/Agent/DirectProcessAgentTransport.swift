@@ -430,6 +430,7 @@ private final class ProjectionBox: @unchecked Sendable {
   private var framer = AgentJSONLFramer()
   private var eventProjector = AgentEventProjector()
   private var projectionError: Error?
+  private var reportedThinkingTokens = 0
   private let progress: (@Sendable (AgentLiveProgress) -> Void)?
 
   init(
@@ -447,6 +448,17 @@ private final class ProjectionBox: @unchecked Sendable {
       let batch = framer.consume(data)
       for raw in batch.records {
         let event = try AgentEvent(raw: raw)
+        // Thinking-token counters carry no projected state and arrive per streamed chunk, so
+        // they update progress without an fsync'd journal record each.
+        if event.isThinkingTokenEstimate {
+          if let tokens = event.estimatedTokens,
+            let update = AgentLiveProgress.thinkingUpdate(
+              estimatedTokens: tokens, previouslyReported: &reportedThinkingTokens)
+          {
+            updates.append(update)
+          }
+          continue
+        }
         // A syntactically accepted event is durable before any projection or
         // capability-floor validation can mutate/reject visible state.
         try journal.append(raw)

@@ -213,8 +213,25 @@ claude -p --output-format stream-json --verbose --tools "" --strict-mcp-config
 - **완료 판정:** `result` 이벤트가 정확히 하나여야 한다. `is_error: true`이면 실패이며(인증 실패도
   `subtype: "success"`와 함께 이 방식으로 보고된다), 성공 결과와 종료 코드 0이 함께 있어야 완료다.
   모델명이 `<synthetic>`인 메시지는 CLI가 만든 오류 안내이므로 assistant 응답으로 저장하지 않는다.
-- stdout JSONL은 프레이밍·프로젝션·저널 기록을 거친다. stderr와 저널 크기는 제한되며, 자식
-  프로세스 그룹은 취소·타임아웃 때 종료 요청을 받는다.
+- **거절과 오류 안내:** 안전 분류기 거절(`stop_reason: "refusal"`, `system/model_refusal_no_fallback`)과
+  인증·API 오류는 실패한 turn으로 기록하고, CLI가 보낸 원인·해결 문단을 채팅·리뷰 상태에 함께
+  표시한다. `--fallback-model`은 거절에 적용되지 않으므로 사용하지 않는다.
+- stdout JSONL은 프레이밍·프로젝션·저널 기록을 거친다. 스트리밍 중 반복되는
+  `system/thinking_tokens` 추정치는 상태를 담지 않으므로 저널에 쓰지 않고, 약 500토큰마다
+  진행 표시로만 반영한다. stderr와 저널 크기는 제한되며, 자식 프로세스 그룹은 취소·타임아웃 때
+  종료 요청을 받는다.
+
+### 5.2 실제 CLI 확인 결과 (Claude Code 2.1.231, 2026-10-15)
+
+- 격리 인자로 실행한 `system/init`은 `tools: []`, `mcp_servers: []`, `plugins: []`,
+  `permissionMode: dontAsk`를 보고했다.
+- `--resume`은 같은 세션 ID를 유지하고 이전 turn 내용을 기억했다. 저장된 세션 기록에는 사용자·
+  assistant 메시지만 있었다.
+- 작업 폴더와 상위 폴더에 CLAUDE.md를 둔 시험에서 기본 실행은 두 파일의 지시를 모두 받았고,
+  `--setting-sources ""` 실행은 어느 쪽도 받지 않았다.
+- 합성 논문과 대화로 실제 리뷰 생성을 끝까지 실행해 JSON 반환, 검증, 렌더링, 승격을 확인했다.
+- 별칭 해석은 CLI 버전에 따른다. 이 버전에서 기본 모델은 `claude-opus-5`, `haiku`는
+  `claude-haiku-4-5`로 해석되었다.
 
 ### 5.1 Codex에서의 전환
 

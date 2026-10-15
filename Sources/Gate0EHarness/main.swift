@@ -54,14 +54,14 @@ enum Gate0EHarness {
     let new = try run(
       name: "new", executable: executable, workspace: workspace, evidenceRoot: evidenceRoot,
       kind: .new,
-      prompt: "Reply with exactly GATE0E_NEW_OK and no other text. Do not use tools.")
+      prompt: "Name one primary color in a single short sentence, then end with the marker GATE0E_NEW_OK.")
     guard new.outcome == AgentOperationOutcome.turnCompleted.rawValue,
       let threadID = new.projectedThreadID
     else { throw failure("real new operation did not complete") }
     let resumed = try run(
       name: "resume", executable: executable, workspace: workspace, evidenceRoot: evidenceRoot,
       kind: .resume(sessionID: threadID),
-      prompt: "Reply with exactly GATE0E_RESUME_OK and no other text. Do not use tools.")
+      prompt: "Which color did you name in your previous answer? Answer in one short sentence, then end with the marker GATE0E_RESUME_OK.")
     guard resumed.outcome == AgentOperationOutcome.turnCompleted.rawValue else {
       throw failure("real resume operation did not complete")
     }
@@ -76,7 +76,7 @@ enum Gate0EHarness {
     let retry = try run(
       name: "retry-after-cancel", executable: executable, workspace: workspace,
       evidenceRoot: evidenceRoot, kind: .new,
-      prompt: "This is an explicit retry after a cancelled operation. Reply exactly GATE0E_RETRY_OK and no other text. Do not use tools.")
+      prompt: "Give one sentence about why units of measurement matter, then end with the marker GATE0E_RETRY_OK.")
     guard retry.outcome == AgentOperationOutcome.turnCompleted.rawValue else {
       throw failure("real retry did not complete")
     }
@@ -111,7 +111,7 @@ enum Gate0EHarness {
   ) throws -> Gate0EOperationEvidence {
     let invocation = try AgentInvocation(
       executableURL: executable, kind: kind,
-      systemPrompt: "PAPERTRAIL_GATE0E_HARNESS: You are a test probe. Follow the user's reply format exactly.",
+      systemPrompt: "PAPERTRAIL_GATE0E_HARNESS\nYou are a concise, friendly assistant.",
       prompt: prompt, workingDirectory: workspace)
     let directory = evidenceRoot.appendingPathComponent(name, isDirectory: true)
     let journal = try OperationJournal(directoryURL: directory)

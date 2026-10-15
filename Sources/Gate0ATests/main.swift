@@ -249,6 +249,7 @@ enum Gate0ATests {
       printf '%s\n' '\(initEvent)'
       printf '%s\n' '{"type":"assistant","message":{"id":"M1","model":"claude-test","content":[{"type":"thinking","thinking":"checking evidence"}]},"session_id":"S1"}'
       printf '%s\n' '{"type":"stream_event","event":{"type":"content_block_delta","delta":{"text":"must-not-surface"}}}'
+      for tokens in 1 6 600 700 1200; do printf '{"type":"system","subtype":"thinking_tokens","estimated_tokens":%s,"session_id":"S1"}\n' "$tokens"; done
       printf '%s\n' '{"type":"assistant","message":{"id":"E1","model":"<synthetic>","content":[{"type":"text","text":"synthetic-must-not-surface"}]},"session_id":"S1"}'
       printf '%s\n' '{"type":"assistant","message":{"id":"M1","model":"claude-test","content":[{"type":"text","text":"\(longText)"}]},"session_id":"S1"}'
       printf '%s\n' '\(successEvent)'
@@ -273,6 +274,15 @@ enum Gate0ATests {
     try expect(
       updates.first?.kind == .status && updates.last?.text == "Claude finished the response",
       "session lifecycle status was not surfaced")
+    let thinking = updates.filter { $0.itemID == "thinking-tokens" }.map(\.text)
+    try expect(
+      thinking == [
+        "Thinking… (about 1 tokens)", "Thinking… (about 600 tokens)",
+        "Thinking… (about 1,200 tokens)",
+      ], "thinking-token progress was not throttled to 500-token steps: \(thinking)")
+    try expect(
+      try !String(contentsOf: journal.eventsURL, encoding: .utf8).contains("thinking_tokens"),
+      "per-chunk thinking counters were fsync'd into the journal")
   }
 
   private static func testProjection() throws {
@@ -310,6 +320,27 @@ enum Gate0ATests {
       AgentCapabilityChecker.classifyOperationFailure(
         diagnostics: failed.state.diagnostics, stderr: "") == .loggedOut,
       "authentication failure was not classified as logged out")
+    try expect(
+      failed.state.failureDetail == "Failed to authenticate: OAuth session expired",
+      "authentication failure detail was not surfaced")
+    // Recorded from a live Claude Code 2.1.231 safeguard refusal.
+    let refusal = [
+      initEvent,
+      #"{"type":"system","subtype":"model_refusal_no_fallback","original_model":"claude-opus-5","api_refusal_category":"reasoning_extraction","session_id":"S1"}"#,
+      #"{"type":"assistant","message":{"id":"E2","model":"<synthetic>","content":[{"type":"text","text":"API Error: Opus 5's safeguards flagged this message."}]},"session_id":"S1"}"#,
+      #"{"type":"result","subtype":"success","is_error":true,"stop_reason":"refusal","terminal_reason":"api_error","result":"API Error: Opus 5's safeguards flagged this message. This sometimes happens with safe, normal conversations.\n\nTry rephrasing the request in a new session or change your model.\n\nLearn more: https://support.claude.com/","session_id":"S1"}"#,
+    ]
+    var refused = AgentEventProjector()
+    for line in refusal { try refused.project(AgentEvent(raw: Data(line.utf8))) }
+    refused.reconcile(exitStatus: 1, cancellationRequested: false)
+    try expect(
+      refused.state.outcome == .failed && refused.state.messages.isEmpty,
+      "safeguard refusal was not a failed turn without an assistant answer")
+    try expect(
+      refused.state.failureDetail
+        == "API Error: Opus 5's safeguards flagged this message. This sometimes happens with safe, normal conversations. Try rephrasing the request in a new session or change your model.",
+      "refusal detail lost its remedy: \(String(describing: refused.state.failureDetail))")
+    try expect(projector.state.failureDetail == nil, "completed turn reported a failure detail")
 
     try expect(
       try outcome([successEvent], exit: 1) == .protocolFailure,

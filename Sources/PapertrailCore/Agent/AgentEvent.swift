@@ -29,6 +29,7 @@ public struct AgentEvent: Equatable, Sendable {
   public let isError: Bool?
   public let resultText: String?
   public let terminalReason: String?
+  public let estimatedTokens: Int?
   public let canonicalRaw: Data
 
   public init(raw: Data) throws {
@@ -44,6 +45,7 @@ public struct AgentEvent: Equatable, Sendable {
     isError = object["is_error"] as? Bool
     resultText = object["result"] as? String
     terminalReason = object["terminal_reason"] as? String
+    estimatedTokens = object["estimated_tokens"] as? Int
     if let message = object["message"] as? [String: Any] {
       messageID = message["id"] as? String
       model = message["model"] as? String
@@ -64,6 +66,9 @@ public struct AgentEvent: Equatable, Sendable {
   }
 
   public var isSynthetic: Bool { model == Self.syntheticModel }
+
+  /// Claude Code streams `system/thinking_tokens` counters while the model thinks.
+  public var isThinkingTokenEstimate: Bool { type == "system" && subtype == "thinking_tokens" }
 
   public var deduplicationKey: String {
     let digest = SHA256.hash(data: canonicalRaw).map { String(format: "%02x", $0) }.joined()
@@ -119,6 +124,17 @@ public struct AgentProjectedState: Codable, Equatable, Sendable {
     self.terminalEvents = terminalEvents
     self.outcome = outcome
     self.resultText = resultText
+  }
+
+  /// The CLI's own explanation of a failed turn (authentication, refusal, API error), bounded
+  /// for status text. Its first two paragraphs carry the cause and the suggested remedy.
+  public var failureDetail: String? {
+    guard outcome != .turnCompleted, let last = diagnostics.last else { return nil }
+    let paragraphs = last.components(separatedBy: "\n\n").prefix(2)
+      .map { $0.replacingOccurrences(of: "\n", with: " ").trimmingCharacters(in: .whitespaces) }
+      .filter { !$0.isEmpty }
+    guard !paragraphs.isEmpty else { return nil }
+    return String(paragraphs.joined(separator: " ").prefix(400))
   }
 
   public func stableBytes() throws -> Data {

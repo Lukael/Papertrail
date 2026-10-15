@@ -47,6 +47,20 @@ public struct AgentLiveProgress: Equatable, Sendable {
     }
   }
 
+  /// Reports thinking progress at most once per 500 estimated tokens so a long turn does not
+  /// flood the UI with per-chunk counters.
+  static func thinkingUpdate(estimatedTokens: Int, previouslyReported: inout Int)
+    -> AgentLiveProgress?
+  {
+    guard estimatedTokens > 0,
+      previouslyReported == 0 || estimatedTokens >= previouslyReported + 500
+    else { return nil }
+    previouslyReported = estimatedTokens
+    return .init(
+      kind: .reasoning, itemID: "thinking-tokens",
+      text: "Thinking… (about \(estimatedTokens.formatted()) tokens)")
+  }
+
   private static func boundedVisibleText(_ value: String?) -> String? {
     guard let value else { return nil }
     let filtered = value.unicodeScalars.filter {

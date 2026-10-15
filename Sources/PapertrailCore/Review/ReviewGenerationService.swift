@@ -187,7 +187,9 @@ public struct ReviewGenerationService: Sendable {
       return ReviewGenerationResult(
         generationID: identity.generationID, versionID: nil,
         processOutcome: Self.persisted(result.state.outcome), structuralValidation: .notRun,
-        evidenceReportState: .missing, label: Self.persisted(result.state.outcome).rawValue,
+        evidenceReportState: .missing,
+        label: Self.persisted(result.state.outcome).rawValue
+          + (result.state.failureDetail.map { " · Claude Code: \($0)" } ?? ""),
         selected: false)
     }
 
