@@ -397,14 +397,17 @@ enum Gate0ETests {
       purposeReferenceID: generationID,
       workspaceRelativePath: try paths.relativePath(for: reviewWorkspace), lifecycle: .active)
     snapshot.sessions = [chatSession, reviewSession]
+    var reviewOperation = CodexOperation(
+      id: reviewOperationID, sessionID: reviewSessionID, kind: "generateReview",
+      promptSHA256: "r", journalRelativePath: "y")
+    reviewOperation.processOutcomeRawValue = ProcessOutcome.turnCompleted.rawValue
     snapshot.operations = [
       CodexOperation(
         id: chatOperationID, sessionID: chatSessionID, kind: "chatTurn", promptSHA256: "c",
         journalRelativePath: "x"),
-      CodexOperation(
-        id: reviewOperationID, sessionID: reviewSessionID, kind: "generateReview",
-        promptSHA256: "r", journalRelativePath: "y"),
+      reviewOperation,
     ]
+    let narrationDate = Date(timeIntervalSince1970: 1_800_000_000)
     snapshot.messages = [
       ChatMessage(
         paperID: paper.id, sessionID: chatSessionID, operationID: chatOperationID, role: "user",
@@ -412,6 +415,14 @@ enum Gate0ETests {
       ChatMessage(
         paperID: paper.id, sessionID: reviewSessionID, operationID: reviewOperationID,
         role: "user", committedContent: "review request", deliveryState: "committed"),
+      ChatMessage(
+        paperID: paper.id, sessionID: reviewSessionID, operationID: reviewOperationID,
+        role: "assistant", committedContent: "I will write output/review.json",
+        deliveryState: "committed", createdAt: narrationDate.addingTimeInterval(-5)),
+      ChatMessage(
+        paperID: paper.id, sessionID: reviewSessionID, operationID: reviewOperationID,
+        role: "assistant", committedContent: "review.json", deliveryState: "committed",
+        createdAt: narrationDate),
     ]
     snapshot.generations = [
       ReviewGeneration(
@@ -424,14 +435,22 @@ enum Gate0ETests {
     let receipt = try AgentChatResetMigration.runIfNeeded(store: store, paths: paths)
     try expect(
       receipt?.deletedSessionCount == 1 && receipt?.deletedOperationCount == 1
-        && receipt?.deletedMessageCount == 1 && receipt?.fileCleanupPending == false,
+        && receipt?.deletedMessageCount == 1 && receipt?.replacedReviewMessageCount == 2
+        && receipt?.fileCleanupPending == false,
       "reset receipt was not exact: \(String(describing: receipt))")
     snapshot = try store.load()
     try expect(
       snapshot.sessions.map(\.id) == [reviewSessionID]
         && snapshot.operations.map(\.id) == [reviewOperationID]
-        && snapshot.messages.map(\.committedContent) == ["review request"],
-      "reset removed review records or kept Codex chat records")
+        && snapshot.messages.map(\.committedContent)
+          == ["review request", ReviewChatProjection.completedFallback],
+      "reset removed review records or kept Codex chat or review narration")
+    try expect(
+      snapshot.messages.last?.id
+        == ChatMessageIdentity.assistant(
+          operationID: reviewOperationID, itemID: ReviewChatProjection.completedItemID)
+        && snapshot.messages.last?.createdAt == narrationDate,
+      "review summary did not take the deterministic id and the narration's time")
     try expect(snapshot.generations.map(\.id) == [generationID], "reset touched review generations")
     try expect(snapshot.papers[0].currentChatSessionID == nil, "current chat pointer survived reset")
     try expect(

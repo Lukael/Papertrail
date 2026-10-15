@@ -230,14 +230,20 @@ claude -p --output-format stream-json --verbose --tools "" --strict-mcp-config
 - 작업 폴더와 상위 폴더에 CLAUDE.md를 둔 시험에서 기본 실행은 두 파일의 지시를 모두 받았고,
   `--setting-sources ""` 실행은 어느 쪽도 받지 않았다.
 - 합성 논문과 대화로 실제 리뷰 생성을 끝까지 실행해 JSON 반환, 검증, 렌더링, 승격을 확인했다.
-- 별칭 해석은 CLI 버전에 따른다. 이 버전에서 기본 모델은 `claude-opus-5`, `haiku`는
+- 별칭 해석은 CLI 버전에 따른다. 이 버전에서 기본 모델과 `opus`는 `claude-opus-5`, `haiku`는
   `claude-haiku-4-5`로 해석되었다.
+- 실제 라이브러리 사본(논문 11편)으로 릴리스 앱을 실행해 1회 정리(채팅 세션 6개·작업 30개 삭제,
+  리뷰 진행 메시지 16개를 요약 2개로 교체, 리뷰 버전 유지)를 확인했다. 같은 앱에서 채팅 첫 turn과
+  `--resume` 후속 turn이 SwiftData 저장소에 커밋되었고, 논문 텍스트 캐시 덕분에 후속 turn 비용은 첫
+  turn의 약 7%였다.
 
 ### 5.1 Codex에서의 전환
 
 Codex thread ID는 Claude Code에서 resume할 수 없으므로, 전환 후 첫 실행 때 한 번만 Codex 채팅
 세션과 그 작업·메시지, 각 논문의 `chat` 작업 폴더, legacy 채팅 포인터 파일을 삭제한다.
-논문, 리뷰 생성 기록, 리뷰 버전과 리뷰 세션 레코드는 보존한다. 저장소 변경을 먼저 커밋하고
+논문, 리뷰 생성 기록, 리뷰 버전과 리뷰 세션 레코드는 보존한다. 리뷰 세션에 남은 Codex 진행
+메시지는 지우고, 완료된 생성에는 새 생성과 같은 고정 요약 한 줄을 결정적 ID와 원래 시각으로 남긴다.
+전환 안내는 detail 열 상단에 표시하며 사용자가 닫을 수 있다. 저장소 변경을 먼저 커밋하고
 `Store/agent-provider-claude.json` 표시 파일을 마지막에 쓰므로 중단되어도 다음 실행에서 안전하게
 반복된다. 영속 모델 이름 `CodexSession`/`CodexOperation`은 기존 저장소를 마이그레이션 없이 열기
 위해 유지하며, `externalThreadID`에는 Claude Code 세션 ID를 저장한다.

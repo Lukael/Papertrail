@@ -31,6 +31,7 @@ struct PaperLibraryView: View {
   @State private var paperPendingRename: PaperListItem?
   @State private var editedPaperTitle = ""
   @State private var showsAppInformation = false
+  @State private var showsLaunchNotice = true
   @State private var titleQuery = ""
   @State private var paperEditingTags: PaperListItem?
 
@@ -131,15 +132,21 @@ struct PaperLibraryView: View {
       }
       .navigationTitle("Papers")
     } detail: {
-      if let selectedPaper {
-        PaperWorkspaceView(
-          paper: selectedPaper, controller: controller,
-          reviewController: controller.reviewController(paperID: selectedPaper.id),
-          chatController: controller.chatController(paperID: selectedPaper.id)
-        )
-        .id(selectedPaper.id)
-      } else {
-        ContentUnavailableView("Select a paper", systemImage: "sidebar.left")
+      // The notice is laid out inside the detail column: split-view columns pin their own
+      // headers and composer and do not honor a safe-area inset applied to the split view.
+      VStack(spacing: 0) {
+        launchNotice
+        if let selectedPaper {
+          PaperWorkspaceView(
+            paper: selectedPaper, controller: controller,
+            reviewController: controller.reviewController(paperID: selectedPaper.id),
+            chatController: controller.chatController(paperID: selectedPaper.id)
+          )
+          .id(selectedPaper.id)
+        } else {
+          ContentUnavailableView("Select a paper", systemImage: "sidebar.left")
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
       }
     }
     .sheet(item: $paperEditingTags) { paper in
@@ -265,17 +272,6 @@ struct PaperLibraryView: View {
     } message: {
       Text(controller.notice ?? "")
     }
-    .safeAreaInset(edge: .top) {
-      if let launchRepairMessage {
-        HStack {
-          Label(launchRepairMessage, systemImage: "wrench.and.screwdriver")
-          Spacer()
-        }
-        .font(.callout)
-        .padding(10)
-        .background(.orange.opacity(0.18))
-      }
-    }
     .toolbar {
       ToolbarItemGroup(placement: .automatic) {
         Menu {
@@ -351,6 +347,22 @@ struct PaperLibraryView: View {
       }
     }
     .animation(.easeOut(duration: 0.16), value: showsAppInformation)
+  }
+
+  @ViewBuilder private var launchNotice: some View {
+    if let launchRepairMessage, showsLaunchNotice {
+      HStack(alignment: .firstTextBaseline) {
+        Label(launchRepairMessage, systemImage: "wrench.and.screwdriver")
+        Spacer()
+        Button("Dismiss", systemImage: "xmark") { showsLaunchNotice = false }
+          .labelStyle(.iconOnly)
+          .buttonStyle(.borderless)
+          .help("Hide this notice")
+      }
+      .font(.callout)
+      .padding(10)
+      .background(.orange.opacity(0.18))
+    }
   }
 
   private var appInformationPanel: some View {

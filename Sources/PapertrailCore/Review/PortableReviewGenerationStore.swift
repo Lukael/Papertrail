@@ -140,7 +140,7 @@
         // summary instead of echoing the document or a partial fragment of it.
         let projectedMessages = outcome == .turnCompleted
           ? [ProjectedMessage(
-              itemID: "papertrail-review-completed", draft: nil,
+              itemID: ReviewChatProjection.completedItemID, draft: nil,
               committed: ReviewChatProjection.completedFallback)]
           : []
         for projected in projectedMessages {

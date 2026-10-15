@@ -8,12 +8,15 @@ public struct AgentChatResetReceipt: Equatable, Sendable {
   public let deletedSessionCount: Int
   public let deletedOperationCount: Int
   public let deletedMessageCount: Int
+  /// Codex review-generation narration replaced by the fixed review summary.
+  public let replacedReviewMessageCount: Int
   public let fileCleanupPending: Bool
 }
 
 /// One-time switch from Codex to Claude chat. Codex thread IDs cannot be resumed by Claude Code,
 /// so paper-chat sessions, their turns, messages, and staged workspaces are removed. Papers,
-/// review generations, review versions, and their review-session records are preserved.
+/// review generations, review versions, and their review-session records are preserved; the
+/// Codex narration in review sessions is replaced by the fixed summary new generations record.
 ///
 /// The store change commits first and the marker is written last, so an interrupted run repeats
 /// safely: the store step then finds nothing and only the file cleanup is retried.
@@ -56,11 +59,42 @@ public enum AgentChatResetMigration {
       messages.forEach(context.delete)
       operations.forEach(context.delete)
       chatSessions.forEach(context.delete)
+      let reviewSessionIDs = Set(
+        try context.fetch(FetchDescriptor<CodexSession>()).filter {
+          $0.purpose == .reviewGeneration
+        }.map(\.id))
+      let allMessages = try context.fetch(FetchDescriptor<ChatMessage>()).filter {
+        !sessionIDs.contains($0.sessionID)
+      }
+      var replaced = 0
+      for operation in try context.fetch(FetchDescriptor<CodexOperation>())
+      where reviewSessionIDs.contains(operation.sessionID) {
+        let summaryID = ChatMessageIdentity.assistant(
+          operationID: operation.id, itemID: ReviewChatProjection.completedItemID)
+        let narration = allMessages.filter {
+          $0.operationID == operation.id && $0.roleRawValue == "assistant" && $0.id != summaryID
+        }
+        guard let latest = narration.map(\.createdAt).max() else { continue }
+        replaced += narration.count
+        let paperID = narration[0].paperID
+        narration.forEach(context.delete)
+        if operation.processOutcomeRawValue == ProcessOutcome.turnCompleted.rawValue,
+          !allMessages.contains(where: { $0.id == summaryID })
+        {
+          context.insert(
+            ChatMessage(
+              id: summaryID, paperID: paperID, sessionID: operation.sessionID,
+              operationID: operation.id, role: "assistant",
+              committedContent: ReviewChatProjection.completedFallback,
+              deliveryState: "committed", createdAt: latest))
+        }
+      }
       try context.save()
       let paperIDs = try context.fetch(FetchDescriptor<Paper>()).map(\.id)
       return finish(
         paths: paths, paperIDs: paperIDs, sessions: chatSessions.count,
-        operations: operations.count, messages: messages.count, fileManager: fileManager)
+        operations: operations.count, messages: messages.count, replaced: replaced,
+        fileManager: fileManager)
     }
   #else
     @discardableResult
@@ -68,7 +102,7 @@ public enum AgentChatResetMigration {
       store: DurableModelStore, paths: LibraryPaths, fileManager: FileManager = .default
     ) throws -> AgentChatResetReceipt? {
       guard !isComplete(paths: paths, fileManager: fileManager) else { return nil }
-      let counts = try store.transaction { snapshot -> (Int, Int, Int, [UUID]) in
+      let counts = try store.transaction { snapshot -> (Int, Int, Int, Int, [UUID]) in
         let sessionIDs = Set(snapshot.sessions.filter { $0.purpose == .paperChat }.map(\.id))
         let sessionCount = sessionIDs.count
         let operationCount = snapshot.operations.filter { sessionIDs.contains($0.sessionID) }.count
@@ -76,6 +110,31 @@ public enum AgentChatResetMigration {
         snapshot.messages.removeAll { sessionIDs.contains($0.sessionID) }
         snapshot.operations.removeAll { sessionIDs.contains($0.sessionID) }
         snapshot.sessions.removeAll { sessionIDs.contains($0.id) }
+        let reviewSessionIDs = Set(
+          snapshot.sessions.filter { $0.purpose == .reviewGeneration }.map(\.id))
+        var replaced = 0
+        for operation in snapshot.operations where reviewSessionIDs.contains(operation.sessionID) {
+          let summaryID = ChatMessageIdentity.assistant(
+            operationID: operation.id, itemID: ReviewChatProjection.completedItemID)
+          let narration = snapshot.messages.filter {
+            $0.operationID == operation.id && $0.roleRawValue == "assistant" && $0.id != summaryID
+          }
+          guard let latest = narration.map(\.createdAt).max() else { continue }
+          replaced += narration.count
+          let paperID = narration[0].paperID
+          let narrationIDs = Set(narration.map(\.id))
+          snapshot.messages.removeAll { narrationIDs.contains($0.id) }
+          if operation.processOutcomeRawValue == ProcessOutcome.turnCompleted.rawValue,
+            !snapshot.messages.contains(where: { $0.id == summaryID })
+          {
+            snapshot.messages.append(
+              ChatMessage(
+                id: summaryID, paperID: paperID, sessionID: operation.sessionID,
+                operationID: operation.id, role: "assistant",
+                committedContent: ReviewChatProjection.completedFallback,
+                deliveryState: "committed", createdAt: latest))
+          }
+        }
         for index in snapshot.papers.indices {
           snapshot.papers[index].currentChatSessionID = nil
           if snapshot.papers[index].repairState == .currentChatPointerInvalid
@@ -84,17 +143,17 @@ public enum AgentChatResetMigration {
             snapshot.papers[index].repairState = .none
           }
         }
-        return (sessionCount, operationCount, messageCount, snapshot.papers.map(\.id))
+        return (sessionCount, operationCount, messageCount, replaced, snapshot.papers.map(\.id))
       }
       return finish(
-        paths: paths, paperIDs: counts.3, sessions: counts.0, operations: counts.1,
-        messages: counts.2, fileManager: fileManager)
+        paths: paths, paperIDs: counts.4, sessions: counts.0, operations: counts.1,
+        messages: counts.2, replaced: counts.3, fileManager: fileManager)
     }
   #endif
 
   private static func finish(
     paths: LibraryPaths, paperIDs: [UUID], sessions: Int, operations: Int, messages: Int,
-    fileManager: FileManager
+    replaced: Int, fileManager: FileManager
   ) -> AgentChatResetReceipt {
     var cleanupPending = false
     // Chat workspaces live only under each paper's `chat` directory; reviews live elsewhere.
@@ -130,7 +189,8 @@ public enum AgentChatResetMigration {
     }
     return AgentChatResetReceipt(
       deletedSessionCount: sessions, deletedOperationCount: operations,
-      deletedMessageCount: messages, fileCleanupPending: cleanupPending)
+      deletedMessageCount: messages, replacedReviewMessageCount: replaced,
+      fileCleanupPending: cleanupPending)
   }
 
   /// Staged inputs are read-only (0400/0500); restore owner write access so removal succeeds.

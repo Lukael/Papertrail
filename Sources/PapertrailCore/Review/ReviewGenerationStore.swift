@@ -67,6 +67,9 @@ public enum ReviewChatProjection {
     return "Generate a Papertrail document for “\(title)” from the paper and completed conversation captured when generation was requested. Keep paper evidence separate from discussion interpretations, hypotheses, and open questions."
   }
 
+  /// Item ID of the fixed summary that stands in for the returned review document in chat.
+  public static let completedItemID = "papertrail-review-completed"
+
   public static let completedFallback =
     "Review generation completed. Papertrail is validating and preparing the generated review."
 }
