@@ -337,6 +337,7 @@ public enum ChatMarkdownRenderer {
   private static func isAllowed(link: URL) -> Bool {
     guard let scheme = link.scheme?.lowercased() else { return false }
     return scheme == "http" || scheme == "https" || scheme == "mailto"
+      || scheme == PaperSourceLink.pageScheme
   }
 
   private static func replaceMath(

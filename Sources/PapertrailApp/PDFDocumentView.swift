@@ -2,12 +2,102 @@ import PDFKit
 import SwiftUI
 import CoreImage
 
+/// Shows a 0-based PDF page and, when `text` is found on it, selects that text.
+/// Each request has a fresh `id`, so repeating a click repeats the jump.
+struct PDFFocusRequest: Equatable {
+  let id = UUID()
+  let pageIndex: Int
+  var text: String?
+}
+
+/// Text to highlight on a 0-based PDF page, such as a verified review excerpt.
+struct PDFTextAnchor: Equatable {
+  let pageIndex: Int
+  let text: String
+
+  /// UTF-16 range of `text` in `pageText` for `PDFPage.selection(for:)`. Matches the review
+  /// validator: whitespace runs, ligatures, soft hyphens, and hyphens between letters (PDF
+  /// line-end breaks such as "fol-\nlowed") are ignored.
+  static func range(of text: String, in pageText: String) -> NSRange? {
+    let needle = normalized(text).characters
+    guard let first = needle.first else { return nil }
+    let (haystack, spans) = normalized(pageText)
+    guard needle.count <= haystack.count else { return nil }
+    for start in 0...(haystack.count - needle.count)
+    where haystack[start] == first && haystack[start...].starts(with: needle) {
+      let end = spans[start + needle.count - 1]
+      return NSRange(
+        location: spans[start].location, length: NSMaxRange(end) - spans[start].location)
+    }
+    return nil
+  }
+
+  /// Normalized characters, each with the UTF-16 span of the source text it came from.
+  private static func normalized(_ text: String) -> (characters: [Character], spans: [NSRange]) {
+    var characters: [Character] = []
+    var spans: [NSRange] = []
+    var pendingSpace = false
+    var offset = 0
+    for character in text {
+      let length = character.utf16.count
+      defer { offset += length }
+      if character == "\u{00AD}" { continue }
+      if character.isWhitespace {
+        pendingSpace = !characters.isEmpty
+        continue
+      }
+      if pendingSpace {
+        characters.append(" ")
+        spans.append(NSRange(location: offset, length: 0))
+        pendingSpace = false
+      }
+      for expanded in String(character).precomposedStringWithCompatibilityMapping {
+        characters.append(expanded)
+        spans.append(NSRange(location: offset, length: length))
+      }
+    }
+    var kept: [Character] = []
+    var keptSpans: [NSRange] = []
+    var index = 0
+    while index < characters.count {
+      if "-\u{2010}\u{2011}".contains(characters[index]), kept.last?.isLetter == true {
+        var next = index + 1
+        if next < characters.count, characters[next] == " " { next += 1 }
+        if next < characters.count, characters[next].isLetter {
+          index = next
+          continue
+        }
+      }
+      kept.append(characters[index])
+      keptSpans.append(spans[index])
+      index += 1
+    }
+    return (kept, keptSpans)
+  }
+}
+
+enum PDFSelectionAction: Int, CaseIterable {
+  case explain, translate, ask
+
+  var title: String {
+    switch self {
+    case .explain: "Explain Selection"
+    case .translate: "Translate Selection"
+    case .ask: "Ask About Selection"
+    }
+  }
+}
+
 struct PDFDocumentView: View {
   let url: URL
   let pageIndex: Int
   let scale: Double
   var isDarkMode = false
   let onReadingStateChanged: (Int, Double) -> Void
+  var focus: PDFFocusRequest?
+  var highlights: [PDFTextAnchor] = []
+  /// Receives the action, the selected text, and its 1-based page number.
+  var onSelectionAction: ((PDFSelectionAction, String, Int) -> Void)?
 
   @State private var isSearchVisible = false
   @State private var searchQuery = ""
@@ -21,8 +111,10 @@ struct PDFDocumentView: View {
       PDFViewRepresentable(
         url: url, pageIndex: pageIndex, scale: scale, isDarkMode: isDarkMode,
         searchQuery: submittedSearchQuery, searchIndex: searchIndex,
+        focus: focus, highlights: highlights,
         onSearchResultCountChanged: { searchResultCount = $0 },
-        onReadingStateChanged: onReadingStateChanged
+        onReadingStateChanged: onReadingStateChanged,
+        onSelectionAction: onSelectionAction
       )
       .accessibilityLabel("Stored source PDF")
 
@@ -102,8 +194,11 @@ private struct PDFViewRepresentable: NSViewRepresentable {
   let isDarkMode: Bool
   let searchQuery: String
   let searchIndex: Int
+  let focus: PDFFocusRequest?
+  let highlights: [PDFTextAnchor]
   let onSearchResultCountChanged: (Int) -> Void
   let onReadingStateChanged: (Int, Double) -> Void
+  let onSelectionAction: ((PDFSelectionAction, String, Int) -> Void)?
 
   func makeCoordinator() -> Coordinator {
     Coordinator(
@@ -111,7 +206,7 @@ private struct PDFViewRepresentable: NSViewRepresentable {
       onChange: onReadingStateChanged)
   }
 
-  func makeNSView(context: Context) -> PDFView {
+  func makeNSView(context: Context) -> AppearancePDFView {
     let view = AppearancePDFView()
     view.displayMode = .singlePageContinuous
     view.displayDirection = .vertical
@@ -124,18 +219,24 @@ private struct PDFViewRepresentable: NSViewRepresentable {
     context.coordinator.apply(url: url, pageIndex: pageIndex, scale: scale, to: view)
     context.coordinator.applyAppearance(isDarkMode: isDarkMode, to: view)
     context.coordinator.applySearch(query: searchQuery, index: searchIndex, to: view)
+    context.coordinator.applyHighlights(highlights, to: view)
+    context.coordinator.applyFocus(focus, to: view)
+    view.onSelectionAction = onSelectionAction
     return view
   }
 
-  func updateNSView(_ view: PDFView, context: Context) {
+  func updateNSView(_ view: AppearancePDFView, context: Context) {
     context.coordinator.onChange = onReadingStateChanged
     context.coordinator.onSearchResultCountChanged = onSearchResultCountChanged
     context.coordinator.apply(url: url, pageIndex: pageIndex, scale: scale, to: view)
     context.coordinator.applyAppearance(isDarkMode: isDarkMode, to: view)
     context.coordinator.applySearch(query: searchQuery, index: searchIndex, to: view)
+    context.coordinator.applyHighlights(highlights, to: view)
+    context.coordinator.applyFocus(focus, to: view)
+    view.onSelectionAction = onSelectionAction
   }
 
-  static func dismantleNSView(_ view: PDFView, coordinator: Coordinator) {
+  static func dismantleNSView(_ view: AppearancePDFView, coordinator: Coordinator) {
     coordinator.detach()
   }
 
@@ -154,6 +255,10 @@ private struct PDFViewRepresentable: NSViewRepresentable {
     private var selectedSearchIndex = -1
     private var searchGeneration = 0
     private var scrollMonitor: Any?
+    private var appliedFocusID: UUID?
+    private var appliedHighlights: [PDFTextAnchor] = []
+    private weak var highlightedDocument: PDFDocument?
+    private var highlightAnnotations: [PDFAnnotation] = []
 
     init(
       onSearchResultCountChanged: @escaping (Int) -> Void,
@@ -267,6 +372,53 @@ private struct PDFViewRepresentable: NSViewRepresentable {
       if shouldNavigate { view.go(to: selection) }
     }
 
+    func applyFocus(_ request: PDFFocusRequest?, to view: PDFView) {
+      guard let request, request.id != appliedFocusID else { return }
+      appliedFocusID = request.id
+      // Navigate after this view update: the page change records reading state,
+      // and a just-created view needs a layout pass before it can scroll.
+      DispatchQueue.main.async { [weak view] in
+        guard let view, let document = view.document,
+          (0..<document.pageCount).contains(request.pageIndex),
+          let page = document.page(at: request.pageIndex)
+        else { return }
+        if let text = request.text,
+          let range = PDFTextAnchor.range(of: text, in: page.string ?? ""),
+          let selection = page.selection(for: range)
+        {
+          view.setCurrentSelection(selection, animate: true)
+          view.go(to: selection)
+        } else {
+          view.go(to: page)
+        }
+      }
+    }
+
+    /// Draws in-memory highlight annotations; the stored PDF file is never written.
+    func applyHighlights(_ anchors: [PDFTextAnchor], to view: PDFView) {
+      guard anchors != appliedHighlights || view.document !== highlightedDocument else { return }
+      for annotation in highlightAnnotations { annotation.page?.removeAnnotation(annotation) }
+      highlightAnnotations = []
+      appliedHighlights = anchors
+      highlightedDocument = view.document
+      guard let document = view.document else { return }
+      for anchor in anchors {
+        guard (0..<document.pageCount).contains(anchor.pageIndex),
+          let page = document.page(at: anchor.pageIndex),
+          let range = PDFTextAnchor.range(of: anchor.text, in: page.string ?? ""),
+          let selection = page.selection(for: range)
+        else { continue }
+        for line in selection.selectionsByLine() {
+          let annotation = PDFAnnotation(
+            bounds: line.bounds(for: page), forType: .highlight, withProperties: nil)
+          annotation.color = NSColor.systemYellow.withAlphaComponent(0.35)
+          annotation.isReadOnly = true
+          page.addAnnotation(annotation)
+          highlightAnnotations.append(annotation)
+        }
+      }
+    }
+
     @objc private func searchDidFindMatch(_ notification: Notification) {
       guard
         !searchedQuery.isEmpty,
@@ -316,8 +468,41 @@ private struct PDFViewRepresentable: NSViewRepresentable {
 
 
 /// Blends above live PDFKit tiles instead of caching them through a content filter.
-private final class AppearancePDFView: PDFView {
+final class AppearancePDFView: PDFView {
   private let tint = PDFTintView()
+  var onSelectionAction: ((PDFSelectionAction, String, Int) -> Void)?
+
+  override func menu(for event: NSEvent) -> NSMenu? {
+    // Capture before super: building PDFKit's menu can clear the selection.
+    guard onSelectionAction != nil, let document, let selection = currentSelection,
+      let text = selection.string, text.contains(where: { !$0.isWhitespace }),
+      let page = selection.pages.first
+    else { return super.menu(for: event) }
+    let pageNumber = document.index(for: page) + 1
+    let menu = super.menu(for: event) ?? NSMenu()
+    for action in PDFSelectionAction.allCases {
+      let item = NSMenuItem(
+        title: action.title, action: #selector(performSelectionAction(_:)), keyEquivalent: "")
+      item.target = self
+      item.tag = action.rawValue
+      item.representedObject = SelectedText(text: text, pageNumber: pageNumber)
+      menu.insertItem(item, at: action.rawValue)
+    }
+    menu.insertItem(.separator(), at: PDFSelectionAction.allCases.count)
+    return menu
+  }
+
+  private struct SelectedText {
+    let text: String
+    let pageNumber: Int
+  }
+
+  @objc private func performSelectionAction(_ sender: NSMenuItem) {
+    guard let action = PDFSelectionAction(rawValue: sender.tag),
+      let selected = sender.representedObject as? SelectedText
+    else { return }
+    onSelectionAction?(action, selected.text, selected.pageNumber)
+  }
 
   override func layout() {
     super.layout()

@@ -69,6 +69,9 @@ def main():
     result = run([str(rendering), "--composer"], capture_output=True, text=True)
     (OUTPUT / "composer.log").write_text(result.stdout + result.stderr)
     print(result.stdout, end="")
+    result = run([str(rendering), "--citation"], capture_output=True, text=True)
+    (OUTPUT / "citation.log").write_text(result.stdout + result.stderr)
+    print(result.stdout, end="")
     if "--layout-only" in sys.argv:
         return
     for name, args in [

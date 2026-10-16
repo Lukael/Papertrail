@@ -96,6 +96,14 @@ final class ReviewGenerationController: ObservableObject {
     return (try? location.resolve()) == nil ? nil : location
   }
 
+  /// Verified excerpts of the selected review, read from its rendered document.
+  func selectedEvidence() -> [ReviewEvidenceAnchor] {
+    guard let indexURL = try? selectedReviewLocation?.resolve().indexURL,
+      let html = try? String(contentsOf: indexURL, encoding: .utf8)
+    else { return [] }
+    return ReviewEvidenceAnchor.anchors(inReviewHTML: html)
+  }
+
   func generate() {
     guard !isRunning else { return }
     let conversation: ReviewConversationSnapshot

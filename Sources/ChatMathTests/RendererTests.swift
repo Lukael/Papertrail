@@ -32,6 +32,22 @@ func testMathRenderer() throws {
     "JavaScript-shaped TeX affected a subsequent render"
   )
 
+  let cited = PaperSourceLink.linkingPageCitations(
+    in: "결과 [p. 4], 범위 [Sec. 3, pp. 7–8], 수식 [Eq. 2], 부록 [Supp. 3], 링크 [p. 9](https://example.com)")
+  try expectMath(
+    cited
+      == "결과 [[p. 4](papertrail-page:4)], 범위 [[Sec. 3, pp. 7–8](papertrail-page:7)], 수식 [Eq. 2], 부록 [Supp. 3], 링크 [p. 9](https://example.com)",
+    "page citations were not linked: \(cited)")
+  let citedHTML = renderer.html(for: cited)
+  try expectMath(
+    citedHTML.contains(#"[<a href="papertrail-page:4">p. 4</a>]"#),
+    "page citation link was not rendered: \(citedHTML)")
+  try expectMath(
+    PaperSourceLink(url: PaperSourceLink.evidence("ev 1/é").url) == .evidence("ev 1/é"),
+    "evidence link did not round-trip")
+  try expectMath(
+    PaperSourceLink(url: URL(string: "papertrail-page:0")!) == nil, "page zero was accepted")
+
   let untrusted = renderer.html(
     for: #"$\href{https://example.invalid/secret}{open}$ $\includegraphics{https://example.invalid/image.png}$"#
   )
