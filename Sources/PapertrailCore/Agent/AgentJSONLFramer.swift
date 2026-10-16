@@ -1,20 +1,20 @@
 import Foundation
 
-public enum CodexFramingError: Error, Equatable {
+public enum AgentFramingError: Error, Equatable {
   case recordTooLarge
   case invalidUTF8
   case partialRecordAtEOF
 }
 
-public struct CodexFramingBatch: Equatable, Sendable {
+public struct AgentFramingBatch: Equatable, Sendable {
   public let records: [Data]
-  public let error: CodexFramingError?
+  public let error: AgentFramingError?
 }
 
-public struct CodexJSONLFramer: Sendable {
+public struct AgentJSONLFramer: Sendable {
   public let maximumRecordBytes: Int
   private var buffer = Data()
-  private var terminalError: CodexFramingError?
+  private var terminalError: AgentFramingError?
 
   public init(maximumRecordBytes: Int = 1_048_576) {
     self.maximumRecordBytes = maximumRecordBytes
@@ -22,7 +22,7 @@ public struct CodexJSONLFramer: Sendable {
 
   /// Returns every complete valid record preceding a framing failure in the
   /// same chunk. Callers must consume `records` before handling `error`.
-  public mutating func consume(_ data: Data) -> CodexFramingBatch {
+  public mutating func consume(_ data: Data) -> AgentFramingBatch {
     if let terminalError { return .init(records: [], error: terminalError) }
     buffer.append(data)
     var records: [Data] = []
@@ -55,6 +55,6 @@ public struct CodexJSONLFramer: Sendable {
 
   public mutating func finish() throws {
     if let terminalError { throw terminalError }
-    guard buffer.isEmpty else { throw CodexFramingError.partialRecordAtEOF }
+    guard buffer.isEmpty else { throw AgentFramingError.partialRecordAtEOF }
   }
 }

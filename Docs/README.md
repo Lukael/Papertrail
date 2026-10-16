@@ -6,11 +6,13 @@
 
 ## 최신 릴리즈
 
-[v1.2.0 릴리즈 노트](Releases/v1.2.0.md)에 PDF 검색·채팅 줄바꿈·다크 모드 수정과 검증 범위를 정리합니다.
+[v2.0.0 릴리즈 노트](Releases/v2.0.0.md)에 Claude Code 전환, 발표 형식 리뷰, PDF 근거 연결과
+하이라이트·메모, 검증 범위를 정리합니다.
+PDF 검색·채팅 줄바꿈·다크 모드 수정은 [v1.2.0](Releases/v1.2.0.md)을 참고합니다.
 질문 미리보기와 클릭 영역 수정은 [v1.1.2](Releases/v1.1.2.md)를 참고합니다.
 채팅 읽기 화면 개선은 [v1.1.1](Releases/v1.1.1.md)을 참고합니다.
 이전 기능 릴리즈는 [v1.1.0](Releases/v1.1.0.md)을 참고합니다.
-로컬 검증 로그는 `.build/scenarios/release-1.2.0`에 보관합니다.
+로컬 검증 로그는 `.build/scenarios/release-2.0.0`에 보관합니다.
 
 ## 회귀 테스트
 
@@ -26,6 +28,27 @@ done
 
 2026-09-10 수동 문서 생성 시나리오에서는 D/E/F/G/H 총 91개 그룹을 통과했습니다.
 A/C는 이 91개 집계에 포함되지 않습니다.
+
+## Claude 모델 목록과 선택값
+
+```sh
+python3 Scripts/verify-agent-models.py
+```
+
+Gate0A 테스트와 함께 고정 모델 계열·effort 목록, 선택값 저장, 이전(Codex) 모델 ID가
+`--model`로 전달되지 않고 기본값으로 돌아가는지 검사합니다. 모델 추론은 실행하지 않습니다.
+
+## 실제 Claude Code 실행 확인
+
+로그인한 CLI로 도구 없는 실행 계약을 확인합니다. 새 세션, `--resume`의 세션 ID 유지, 취소,
+재시도를 실제로 호출하며 모델 사용량이 발생합니다.
+
+```sh
+claude auth status
+DEVELOPER_DIR=/Library/Developer/CommandLineTools swift run Gate0EHarness \
+  --claude "$(command -v claude)" --workspace "$PWD/.build/scenarios/claude-live" \
+  --output "$PWD/.build/scenarios/claude-live/gate0e.json"
+```
 
 ## WebKit 메시지 스크롤 회귀 검사
 
@@ -85,6 +108,19 @@ swiftc -module-cache-path .build/ModuleCache -parse-as-library \
 .build/scenarios/paper-search-tags/PaperTagsEditorTests
 ```
 
+## 하이라이트와 메모
+
+메모 저장소 검사는 임시 라이브러리에서 저장·다시 읽기, 크기 제한, 심볼릭 링크 거부를 확인합니다.
+PDF 하이라이트 그리기·우클릭 위치 판정·삭제는 아래 PDF 검사에 포함됩니다.
+
+```sh
+mkdir -p .build/scenarios/paper-notes
+swiftc -module-cache-path .build/ModuleCache -parse-as-library -D PPR_PORTABLE_SCHEMA \
+  Sources/PapertrailCore/Storage/LibraryPaths.swift Sources/PapertrailCore/Storage/PaperNoteStore.swift \
+  Tests/PaperNoteStoreTests.swift -o .build/scenarios/paper-notes/PaperNoteStoreTests
+.build/scenarios/paper-notes/PaperNoteStoreTests
+```
+
 ## PDF 검색과 채팅 줄바꿈
 
 ```sh
@@ -92,19 +128,19 @@ sh Scripts/verify-pdf-search.sh
 python3 Scripts/verify-chat-scroll.py --layout-only
 ```
 
-PDF 검사는 생성한 임시 PDF에서 대소문자 무시 검색·페이지 간 결과 이동·검색 해제·문서 전환을 확인합니다.
-채팅 검사는 실제 입력창 코드에 Shift+Enter를 보내 커서 위치 줄바꿈과 전송 방지를 확인하고, Enter가 한 번 전송되는지 검사합니다. 실제 Codex에는 요청하지 않습니다.
+PDF 검사는 생성한 임시 PDF에서 대소문자 무시 검색·페이지 간 결과 이동·검색 해제·문서 전환을 확인합니다. 근거 위치 찾기(줄 끝 하이픈·합자 포함), 근거 이동, 선택 메뉴, 하이라이트도 검사합니다. Ctrl+휠·트랙패드 확대·축소, 배율 제한과 읽기 상태 알림, 일반 스크롤·PDF 밖 입력 유지도 검사합니다.
+채팅 검사는 실제 입력창 코드에 Shift+Enter를 보내 커서 위치 줄바꿈과 전송 방지를 확인하고, Enter가 한 번 전송되는지 검사합니다. 실제 Claude에는 요청하지 않습니다.
 
-## 실제 Codex 생성
+## 실제 Claude 생성
 
-다음 하네스는 별도 라이브러리에 합성 논문과 완료된 대화를 넣고 실제 Codex를 호출합니다.
-Codex CLI 로그인과 네트워크 연결이 필요하며 모델 사용량이 발생합니다.
+다음 하네스는 별도 라이브러리에 합성 논문과 완료된 대화를 넣고 실제 Claude Code를 호출합니다.
+`claude auth login` 로그인과 네트워크 연결이 필요하며 모델 사용량이 발생합니다.
 매 실행마다 새 결과 디렉터리를 사용합니다.
 
 ```sh
 DEVELOPER_DIR=/Library/Developer/CommandLineTools swift run Gate0FHarness \
   "$PWD" "$PWD/.build/scenarios/synthesis-$(date +%Y%m%dT%H%M%S)" \
-  "$(command -v codex)" 300 --with-conversation
+  "$(command -v claude)" 300 --with-conversation
 ```
 
 앱 UI 검증은 다음처럼 사용자 데이터와 분리된 경로로 실행할 수 있습니다.
@@ -127,7 +163,7 @@ open -na "$PWD/Papertrail.app" --args \
 입력·로그·생성 문서가 있으며 Git에서 제외합니다. 증거 요약의 절대 경로는 해당 로컬 실행
 위치를 나타내므로 다른 환경에 파일이 없을 수 있습니다.
 
-기존 `Scripts/verify-gate0*.sh`는 단계별 개발 검증 도구입니다. 일부는 실제 Codex 호출,
+기존 `Scripts/verify-gate0*.sh`는 단계별 개발 검증 도구입니다. 일부는 실제 Claude Code 호출,
 WebKit UI 실행, Command Line Tools 환경에서 SwiftData 빌드가 실패하는 조건 검사를
 포함합니다. 전체 스크립트를 일반 단위 테스트로 취급하지 않습니다. 이 스크립트들이 만드는
 `Docs/Gate*/evidence`는 재생성 가능한 임시 출력이며 Git에서 제외합니다.

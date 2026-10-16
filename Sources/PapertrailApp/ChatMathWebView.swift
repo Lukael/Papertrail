@@ -1,4 +1,5 @@
 import AppKit
+import PapertrailCore
 import SwiftUI
 import WebKit
 
@@ -20,6 +21,7 @@ struct ChatMathWebView: NSViewRepresentable {
     view.sourceText = sourceText
     view.setValue(false, forKey: "drawsBackground")
     view.navigationDelegate = context.coordinator
+    context.coordinator.openURL = context.environment.openURL
     view.onWidthChanged = { [weak coordinator = context.coordinator, weak view] in
       guard let view else { return }
       coordinator?.measure(view)
@@ -31,6 +33,7 @@ struct ChatMathWebView: NSViewRepresentable {
     let view = container.webView
     view.sourceText = sourceText
     context.coordinator.onHeightChanged = onHeightChanged
+    context.coordinator.openURL = context.environment.openURL
     let sizeChanged = context.coordinator.fontSize != fontSize
     context.coordinator.fontSize = fontSize
     guard context.coordinator.html != html else {
@@ -98,6 +101,7 @@ struct ChatMathWebView: NSViewRepresentable {
     var loaded = false
     var fontSize: CGFloat = 13
     var onHeightChanged: (CGFloat) -> Void
+    var openURL: OpenURLAction?
 
     init(onHeightChanged: @escaping (CGFloat) -> Void) {
       self.onHeightChanged = onHeightChanged
@@ -132,6 +136,14 @@ struct ChatMathWebView: NSViewRepresentable {
         ["https", "http", "mailto"].contains(scheme)
       {
         NSWorkspace.shared.open(url)
+        decisionHandler(.cancel)
+        return
+      }
+      // Page citations are handled in-app by the paper workspace.
+      if action.navigationType == .linkActivated, let url = action.request.url,
+        url.scheme?.lowercased() == PaperSourceLink.pageScheme
+      {
+        openURL?(url)
         decisionHandler(.cancel)
         return
       }

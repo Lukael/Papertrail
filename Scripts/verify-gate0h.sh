@@ -5,20 +5,20 @@ repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 module_cache="$repo_root/.build/ModuleCache"
 evidence="$repo_root/Docs/Gate0H/evidence/current"
 python_path=${PYTHON_PATH:-$(command -v python3)}
-codex_path=${CODEX_PATH:-$(command -v codex)}
-case "$codex_path" in
+claude_path=${CLAUDE_PATH:-$(command -v claude)}
+case "$claude_path" in
   /*) ;;
-  *) printf '%s\n' "FAIL: CODEX_PATH must resolve to one absolute executable" >&2; exit 1 ;;
+  *) printf '%s\n' "FAIL: CLAUDE_PATH must resolve to one absolute executable" >&2; exit 1 ;;
 esac
-test -x "$codex_path"
-CODEX_PATH=$codex_path
-export CODEX_PATH
+test -x "$claude_path"
+CLAUDE_PATH=$claude_path
+export CLAUDE_PATH
 mkdir -p "$module_cache" "$evidence"
 
 "$repo_root/Scripts/verify-gate0a.sh" > "$evidence/gate0a-verification.log" 2>&1
 tail -n 4 "$evidence/gate0a-verification.log"
-reported_codex=$("$python_path" -c 'import json,sys; print(json.load(open(sys.argv[1]))["capability"]["executablePath"])' "$repo_root/.build/gate0a-evidence/capability.json")
-test "$reported_codex" = "$CODEX_PATH"
+reported_claude=$("$python_path" -c 'import json,sys; print(json.load(open(sys.argv[1]))["capability"]["executablePath"])' "$repo_root/.build/gate0a-evidence/capability.json")
+test "$reported_claude" = "$CLAUDE_PATH"
 
 for gate in c d e f g; do
   log="$evidence/gate0${gate}-verification.log"
@@ -58,13 +58,13 @@ grep -Eq 'flags=0x2\(adhoc\)|Signature=adhoc' "$evidence/codesign-details.txt"
 test -z "$(find "$app_path" -type l -print -quit)"
 "$repo_root/Scripts/verify-gate0h-finder-launch.sh" "$app_path" "$evidence/finder-launch.json"
 
-rg -n -- '--dangerously-bypass-approvals-and-sandbox|--dangerously-bypass-hook-trust' \
+rg -n -- '--dangerously-skip-permissions' \
   "$repo_root/Sources/PapertrailCore" "$repo_root/Sources/PapertrailApp" \
   > "$evidence/prohibited-flags-denylist.txt"
-test "$(wc -l < "$evidence/prohibited-flags-denylist.txt" | tr -d ' ')" -eq 2
-grep -Fq 'CodexInvocation.swift' "$evidence/prohibited-flags-denylist.txt"
-rg -n 'Process\.executableURL|standardInput|--skip-git-repo-check|--sandbox.*workspace-write' \
-  "$repo_root/Sources/PapertrailCore/Codex" > "$evidence/process-boundary-static.txt"
+test "$(wc -l < "$evidence/prohibited-flags-denylist.txt" | tr -d ' ')" -eq 1
+grep -Fq 'AgentInvocation.swift' "$evidence/prohibited-flags-denylist.txt"
+rg -n 'Process\.executableURL|standardInput|--tools|--strict-mcp-config|--setting-sources|--no-session-persistence' \
+  "$repo_root/Sources/PapertrailCore/Agent" > "$evidence/process-boundary-static.txt"
 rg -n 'allowsContentJavaScript = false|websiteDataStore = \.nonPersistent|allowingReadAccessTo' \
   "$repo_root/Sources/PapertrailCore/Security" \
   "$repo_root/Sources/PapertrailApp/RestrictedReviewWebView.swift" \
@@ -110,7 +110,7 @@ summary = {
   "blockers": [],
   "testMatrix": {"currentGates": "passed", "Gate0HTests": "9/9", "logSHA256": logs},
   "gate0ACurrentCapability": {"status": "usable", "evidenceSHA256": sha(repo / ".build/gate0a-evidence/capability.json")},
-  "security": {"hostileWebKitStatus": webkit["status"], "unexpectedNetworkRequests": 0, "javascriptEnabled": False, "persistentWebsiteDataStore": False, "dangerousCodexFlagsPermitted": 0, "dangerousFlagDenylistEntries": 2},
+  "security": {"hostileWebKitStatus": webkit["status"], "unexpectedNetworkRequests": 0, "javascriptEnabled": False, "persistentWebsiteDataStore": False, "dangerousAgentFlagsPermitted": 0, "dangerousFlagDenylistEntries": 1},
   "privateLocalProfile": {"bundleIdentifier": info["CFBundleIdentifier"], "minimumMacOS": info["LSMinimumSystemVersion"], "signature": "ad-hoc; codesign --verify --deep --strict passed", "entitlements": "no app sandbox, network, or get-task-allow entitlement declared", "executableSHA256": sha(binary), "appBundle": str(app.relative_to(repo))},
   "finderLaunch": {"status": "passed", "evidenceSHA256": sha(evidence / "finder-launch.json"), "surface": finder["launchSurface"]},
   "backupRestore": backup,

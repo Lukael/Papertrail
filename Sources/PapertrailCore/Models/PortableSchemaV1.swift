@@ -83,6 +83,7 @@
     }
   }
 
+  /// Storage names predate the Claude migration and stay unchanged for store compatibility.
   public struct CodexSession: Codable, Equatable, Sendable {
     public var id: UUID
     public var paperID: UUID

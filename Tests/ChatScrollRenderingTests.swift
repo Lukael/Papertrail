@@ -3,7 +3,7 @@ import SwiftUI
 import PapertrailCore
 import WebKit
 // In-memory fixture: the production View is compiled by verify-chat-scroll.py.
-// No library files, Codex sessions, or user messages are accessed.
+// No library files, Claude sessions, or user messages are accessed.
 struct ChatLiveAssistantState { var reasoning: String?; var response: String? }
 @MainActor final class PaperChatController: ObservableObject {
   @Published var messages: [ChatMessageRecord] = []
@@ -17,6 +17,8 @@ struct ChatLiveAssistantState { var reasoning: String?; var response: String? }
   func retry(_ m: ChatMessageRecord) {}
   var sendCount = 0
   func send() {
+    guard !input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+      !isRunning, isAvailable else { return }
     sendCount += 1
     let text = input
     input = ""
@@ -35,11 +37,15 @@ struct ChatLiveAssistantState { var reasoning: String?; var response: String? }
     _ = NSApplication.shared
     NSApp.setActivationPolicy(.accessory)
     if CommandLine.arguments.contains("--composer") {
-      verifyComposer()
+      for messageCount in [0, 60] { verifyComposer(messageCount: messageCount) }
       return
     }
     if CommandLine.arguments.contains("--rail-layout") {
       verifyRailLayout()
+      return
+    }
+    if CommandLine.arguments.contains("--citation") {
+      verifyCitationLink()
       return
     }
     let controller = PaperChatController()
@@ -128,9 +134,9 @@ struct ChatLiveAssistantState { var reasoning: String?; var response: String? }
     window.orderOut(nil)
   }
 
-  static func verifyComposer() {
+  static func verifyComposer(messageCount: Int) {
     let controller = PaperChatController()
-    controller.messages = (0..<60).map { index in
+    controller.messages = (0..<messageCount).map { index in
       ChatMessageRecord(id: UUID(), paperID: UUID(), sessionID: UUID(), operationID: nil,
         role: index.isMultiple(of: 2) ? "user" : "assistant",
         content: "Existing message \(index)", draft: nil,
@@ -171,10 +177,69 @@ struct ChatLiveAssistantState { var reasoning: String?; var response: String? }
       "Send must clear the draft and enter the running state")
     precondition(controller.messages.last?.content == "first\nsecond",
       "Send must append the composed message")
-    precondition(controller.liveAssistant != nil && !input.isEnabled,
-      "Send must show progress and disable editing without blocking the run loop")
+    precondition(controller.liveAssistant != nil && input.isEnabled,
+      "Sending must not disable the native field and deactivate its input method during a SwiftUI update")
+    precondition(window.firstResponder === editor,
+      "Sending must preserve the active field editor")
+    editor.insertText("다음 질문", replacementRange: NSRange(location: NSNotFound, length: 0))
+    precondition(controller.input == "다음 질문", "The next draft must remain editable during a request")
+    enter([])
+    precondition(controller.sendCount == 1 && controller.input == "다음 질문",
+      "Return during a request must neither send twice nor clear the next draft")
+    enter(.shift)
+    precondition(controller.input == "다음 질문\n", "Shift+Return must still insert a newline during a request")
+    editor.setMarkedText("한", selectedRange: NSRange(location: 1, length: 0),
+      replacementRange: NSRange(location: NSNotFound, length: 0))
+    precondition(editor.hasMarkedText(), "The IME regression must have marked text")
+    let consumed = input.delegate?.control?(input, textView: editor,
+      doCommandBy: #selector(NSResponder.insertNewline(_:)))
+    precondition(consumed == false && controller.sendCount == 1,
+      "Marked-text Return must be left to the input method")
+    editor.unmarkText()
+    let nextDraft = controller.input
+    controller.isRunning = false
+    controller.liveAssistant = nil
+    RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+    precondition(controller.input == nextDraft && input.isEnabled,
+      "Completing a request must preserve the next draft")
+    window.makeFirstResponder(nil)
+    controller.input = "> quoted selection\n\n[p. 2] "
+    RunLoop.current.run(until: Date().addingTimeInterval(0.2))
+    precondition(
+      (window.firstResponder as? NSTextView)?.selectedRange()
+        == NSRange(location: (controller.input as NSString).length, length: 0),
+      "An externally inserted draft must focus the composer with the caret at its end")
     window.orderOut(nil)
-    print("PASS: Shift+Enter inserts at caret; Enter updates a 60-message transcript and remains responsive")
+    print("PASS: composer with \(messageCount) messages preserves editing, draft, IME Return, and duplicate-send protection")
+  }
+
+  /// A rendered [p. N] citation reaches the workspace through the openURL environment.
+  static func verifyCitationLink() {
+    var opened: URL?
+    let view = ChatMessageContentView(text: "결과는 [p. 4]에 보고된다.")
+      .environment(\.openURL, OpenURLAction { url in
+        opened = url
+        return .handled
+      })
+    let window = NSWindow(contentRect: NSRect(x: 100, y: 100, width: 500, height: 200),
+      styleMask: [.titled], backing: .buffered, defer: false)
+    window.contentView = NSHostingView(rootView: view)
+    window.orderFront(nil)
+    func webView(in view: NSView) -> WKWebView? {
+      if let web = view as? WKWebView { return web }
+      return view.subviews.compactMap { webView(in: $0) }.first
+    }
+    let deadline = Date().addingTimeInterval(5)
+    while Date() < deadline, opened == nil {
+      // App-owned click on the rendered link; page scripts stay disabled.
+      webView(in: window.contentView!)?.evaluateJavaScript(
+        "document.querySelector('a[href^=\"papertrail-page:\"]')?.click()")
+      RunLoop.current.run(until: Date().addingTimeInterval(0.2))
+    }
+    precondition(opened?.absoluteString == "papertrail-page:4",
+      "Citation link did not open papertrail-page:4: \(String(describing: opened))")
+    window.orderOut(nil)
+    print("PASS: [p. N] citation link opens the paper page through openURL")
   }
 
   static func verifyRailLayout() {

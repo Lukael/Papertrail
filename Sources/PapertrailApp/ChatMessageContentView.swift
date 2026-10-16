@@ -47,14 +47,15 @@ struct ChatMessageContentView: View {
         if case .math = $0 { return true }
         return false
       }
-      guard hasMath || ChatMarkdownRenderer.requiresHTML(in: text) else {
+      let linked = PaperSourceLink.linkingPageCitations(in: text)
+      guard hasMath || ChatMarkdownRenderer.requiresHTML(in: linked) else {
         html = nil
         renderingError = nil
         return
       }
       switch ChatMathRenderer.shared {
       case .success(let renderer):
-        html = renderer.html(for: text)
+        html = renderer.html(for: linked)
         renderingError = nil
       case .failure(let error):
         html = nil

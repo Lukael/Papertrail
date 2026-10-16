@@ -40,15 +40,18 @@
 - Allow paper-only generation when no completed chat exists.
 - In generated documents, visually and semantically distinguish claims supported by verified paper evidence from discussion questions, interpretations, hypotheses, and open questions; each discussion item retains links to its source message IDs.
 - Treat structured JSON as a validated generation boundary and let the app render the accepted data into local static HTML; users interact with the rendered document rather than raw JSON.
+- Generate the document as a journal-club presentation of about fifteen slides grounded only in the paper: each slide shows its title and short evidence-linked points, while the speaker script, figure and table notes, and expected questions stay collapsed. Figures are referenced by label and caption evidence, so a page link focuses the PDF instead of embedding images.
 - Keep Chat visible while the user shows Paper, Review, or both in the source area; when both are visible, their nested split divider and the main chat divider are the primary width controls.
 - Let Review content occupy the full available pane height in Paper-only, Review-only, and split modes; the WebView grows and scrolls inside that area instead of collapsing below the toolbar.
 - Separate authored questions from generated answers by alignment, shape, and identity—not color alone.
 - Show each user and assistant message's persisted date and time in the transcript so a reopened conversation preserves its chronology.
 - Treat every authored question as a stable conversation anchor: emphasize the currently viewed question and provide direct previous/next/marker navigation from a compact trailing-edge rail without leaving the transcript.
 - Keep the active chat composer above every persistent bottom bar and safe-area inset.
-- Keep the chat composer action-focused: do not repeat paper-context or Codex lifecycle status prose beside the input; route operational status to the global activity log.
-- Keep diagnostics global: Review content stays focused and does not repeat process, structure, evidence, or progress text; the bottom log combines app and Codex lifecycle events. Only actionable load failures remain attached to the review.
+- Keep the chat composer action-focused: do not repeat paper-context or Claude lifecycle status prose beside the input; route operational status to the global activity log.
+- Keep diagnostics global: Review content stays focused and does not repeat process, structure, evidence, or progress text; the bottom log combines app and Claude lifecycle events. Only actionable load failures remain attached to the review.
 - Keep secondary disclosures out of the workspace header; place storage and security information beside the model selector in the global toolbar.
+- Offer the fixed Claude model families (Opus, Sonnet, Haiku) and their effort levels, plus Claude default and Model default, in one toolbar menu shared by chat and document generation. Claude Code resolves each family to its newest model, so the menu needs no refresh action.
+- During generation, keep one live log line that names the section being written, the evidence count, and elapsed time; refresh it while Claude is silently thinking.
 - Keep the selected model and reasoning effort fully readable in the toolbar; do not replace or truncate the current selection with an icon or ellipsis when space is available.
 - Tradeoffs: prefer native SwiftUI behavior and readable adaptive layouts over pixel-specific web UI imitation.
 
@@ -74,6 +77,7 @@
 - Target standard: macOS native accessibility defaults.
 - Keyboard/focus behavior: native list, menu, picker, and text field behavior. The chat composer sends with Return and inserts a newline at the caret with Shift+Return, preserving native selection and IME handling.
 - PDF search: Command+F opens and focuses a top-right field. Typing only edits the draft; Enter submits the query, and repeated Enter advances to the next match. Previous/next buttons wrap through highlighted text matches; Escape closes search and clears highlights. Search stays within the current document and resets on document changes.
+- PDF zoom: Control+scroll over the PDF changes its scale within 10–1600%, with mouse-wheel and trackpad sensitivity adjusted to their input units. Preserve ordinary scrolling and other panes; save zoom through the existing reading-state path.
 - Contrast/readability: semantic foreground/background colors.
 - Screen-reader semantics: each message exposes an explicit You or Papertrail assistant identity; user messages additionally expose their question position and every rail marker announces its question number and content.
 - Reduced motion and sensory considerations: message identity does not depend on animation or color alone.
@@ -97,13 +101,13 @@
 - Transcript navigation: scrolling updates the active question anchor; previous, next, and trailing-rail marker selection move focus to a question and visibly emphasize it.
 - Destructive success: paper deletion is reported complete only after its app-owned directory is absent.
 - Disabled: send is disabled for empty input or unavailable chat; Generate document is disabled while a generation is running.
-- Offline/slow network: the running state keeps the composer visible and exposes cancel.
+- Offline/slow network: the running state keeps the composer editable for the next draft and exposes cancel. The controller rejects duplicate sends. Do not disable the active native field during a SwiftUI update: input-method teardown can re-enter the view graph and freeze the window.
 
 ## Content voice
 
 - Tone: concise, factual, research-oriented.
-- Terminology: use “You” and “Papertrail” for chat identities; reserve “Codex” for process/security disclosures.
-- Microcopy rules: label the first Review action “Generate document” and later actions “Regenerate document”; explain that generation captures the paper plus completed conversation through the click time. Explain persistence and paper context only where it aids onboarding; omit repeated context and Codex lifecycle labels from the active composer.
+- Terminology: use “You” and “Papertrail” for chat identities; reserve “Claude” for process/security disclosures.
+- Microcopy rules: label the first Review action “Generate document” and later actions “Regenerate document”; explain that generation captures the paper plus completed conversation through the click time. Explain persistence and paper context only where it aids onboarding; omit repeated context and Claude lifecycle labels from the active composer.
 
 ## Implementation constraints
 

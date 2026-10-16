@@ -82,13 +82,13 @@ public actor SessionOperationQueue {
 public actor PaperChatRuntimeRegistry {
   private let queue = SessionOperationQueue()
   private var activeOperations: [
-    ChatQueueKey: (operationID: UUID, token: CodexCancellationToken)
+    ChatQueueKey: (operationID: UUID, token: AgentCancellationToken)
   ] = [:]
 
   public init() {}
 
   public func run<T: Sendable>(
-    key: ChatQueueKey, operationID: UUID, cancellation: CodexCancellationToken,
+    key: ChatQueueKey, operationID: UUID, cancellation: AgentCancellationToken,
     operation: @Sendable () async throws -> T
   ) async throws -> T {
     try await queue.run(key: key) {
@@ -111,7 +111,7 @@ public actor PaperChatRuntimeRegistry {
   }
 
   private func runRegistered<T: Sendable>(
-    key: ChatQueueKey, operationID: UUID, cancellation: CodexCancellationToken,
+    key: ChatQueueKey, operationID: UUID, cancellation: AgentCancellationToken,
     operation: @Sendable () async throws -> T
   ) async throws -> T {
     guard activeOperations[key] == nil else {

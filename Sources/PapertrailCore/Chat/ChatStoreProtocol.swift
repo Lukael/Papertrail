@@ -96,6 +96,6 @@ public protocol PaperChatStore: Sendable {
     paperID: UUID, sessionID: UUID, prompt: String, operationID: UUID,
     userMessageID: UUID, journalRelativePath: String, retryPredecessorID: UUID?
   ) throws -> PreparedChatTurn
-  func applyTransportResult(operationID: UUID, result: CodexTransportResult) throws
+  func applyTransportResult(operationID: UUID, result: AgentTransportResult) throws
   func recordOperationFailure(operationID: UUID, outcome: ProcessOutcome) throws
 }

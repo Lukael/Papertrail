@@ -17,29 +17,36 @@ final class PaperLibraryController: ObservableObject {
   }
   @Published var notice: String?
   let activityLog = AppActivityLog()
-  @Published var codexModel = CodexModelSelection.load() {
+  let agentModels = AgentModelSelection.choices
+  @Published var agentModel = AgentModelSelection.load() {
     didSet {
-      codexModel.save()
+      guard oldValue != agentModel else { return }
+      agentModel.save()
       reviewControllers.removeAll()
       chatControllers.removeAll()
-      notice = "New Codex operations will use \(codexModel.title) at \(codexEffort.title) effort."
-      activityLog.append(level: .info, notice ?? "Codex model changed.")
+      activityLog.append(
+        level: .info, "New Claude operations will use \(agentModel.title) at \(agentEffort.title) effort.")
     }
   }
-  @Published var codexEffort = CodexReasoningEffort.load() {
+  @Published var agentEffort =
+    AgentModelSelection.load() == .automatic
+    ? AgentReasoningEffort.automatic : AgentReasoningEffort.load()
+  {
     didSet {
-      codexEffort.save()
+      guard oldValue != agentEffort else { return }
+      agentEffort.save()
       reviewControllers.removeAll()
       chatControllers.removeAll()
-      notice = "New Codex operations will use \(codexModel.title) at \(codexEffort.title) effort."
-      activityLog.append(level: .info, notice ?? "Codex effort changed.")
+      activityLog.append(
+        level: .info, "New Claude operations will use \(agentModel.title) at \(agentEffort.title) effort.")
     }
   }
   let paths: LibraryPaths
-  private let codexExecutableProvider = CodexExecutableProvider()
+  private let agentExecutableProvider = AgentExecutableProvider()
   private let chatRuntimeRegistry = PaperChatRuntimeRegistry()
   private var reviewControllers: [UUID: ReviewGenerationController] = [:]
   private var chatControllers: [UUID: PaperChatController] = [:]
+  private var notesModels: [UUID: PaperNotesModel] = [:]
   private var supplementaryMerges: Set<UUID> = []
   private var tagsByPaper: [UUID: [String]] = [:]
   private var latestUserChatByPaper: [UUID: Date] = [:]
@@ -65,6 +72,21 @@ final class PaperLibraryController: ObservableObject {
       activityLog.append(level: .success, "Paper library opened with \(papers.count) paper(s).")
     }
   #endif
+
+  func selectAgentModel(_ model: AgentModelSelection, effort: AgentReasoningEffort) {
+    guard !hasActiveAgentOperations else {
+      notice = "Wait for the current Claude operation to finish before changing models."
+      return
+    }
+    guard effort == .automatic || model.supportedEfforts.contains(effort) else { return }
+    agentModel = model
+    agentEffort = effort
+  }
+
+  private var hasActiveAgentOperations: Bool {
+    reviewControllers.values.contains(where: \.isRunning)
+      || chatControllers.values.contains(where: \.isRunning)
+  }
 
   func prepareImport(from url: URL) throws -> PreparedPDFImport {
     activityLog.append(level: .info, "Preparing PDF import: \(url.lastPathComponent)")
@@ -122,17 +144,25 @@ final class PaperLibraryController: ObservableObject {
     if let existing = reviewControllers[paperID] { return existing }
     #if PPR_PORTABLE_SCHEMA
       let controller = ReviewGenerationController(
-        paperID: paperID, paths: paths, store: store, model: codexModel.commandLineValue,
-        reasoningEffort: codexEffort,
-        activityLog: activityLog, executableProvider: codexExecutableProvider)
+        paperID: paperID, paths: paths, store: store, model: agentModel.commandLineValue,
+        reasoningEffort: agentEffort,
+        activityLog: activityLog, executableProvider: agentExecutableProvider)
     #else
       let controller = ReviewGenerationController(
-        paperID: paperID, paths: paths, container: container, model: codexModel.commandLineValue,
-        reasoningEffort: codexEffort,
-        activityLog: activityLog, executableProvider: codexExecutableProvider)
+        paperID: paperID, paths: paths, container: container, model: agentModel.commandLineValue,
+        reasoningEffort: agentEffort,
+        activityLog: activityLog, executableProvider: agentExecutableProvider)
     #endif
     reviewControllers[paperID] = controller
     return controller
+  }
+
+  func notes(paperID: UUID) -> PaperNotesModel {
+    if let existing = notesModels[paperID] { return existing }
+    let model = PaperNotesModel(
+      paperID: paperID, store: PaperNoteStore(paths: paths), activityLog: activityLog)
+    notesModels[paperID] = model
+    return model
   }
 
   func chatController(paperID: UUID) -> PaperChatController {
@@ -140,14 +170,14 @@ final class PaperLibraryController: ObservableObject {
     #if PPR_PORTABLE_SCHEMA
       let controller = PaperChatController(
         paperID: paperID, paths: paths, store: store, runtimeRegistry: chatRuntimeRegistry,
-        model: codexModel.commandLineValue, reasoningEffort: codexEffort,
-        activityLog: activityLog, executableProvider: codexExecutableProvider)
+        model: agentModel.commandLineValue, reasoningEffort: agentEffort,
+        activityLog: activityLog, executableProvider: agentExecutableProvider)
     #else
       let controller = PaperChatController(
         paperID: paperID, paths: paths, container: container,
-        runtimeRegistry: chatRuntimeRegistry, model: codexModel.commandLineValue,
-        reasoningEffort: codexEffort, activityLog: activityLog,
-        executableProvider: codexExecutableProvider)
+        runtimeRegistry: chatRuntimeRegistry, model: agentModel.commandLineValue,
+        reasoningEffort: agentEffort, activityLog: activityLog,
+        executableProvider: agentExecutableProvider)
     #endif
     controller.onUserMessage = { [weak self] date in
       self?.noteChatActivity(paperID: paperID, at: date)
@@ -313,7 +343,7 @@ final class PaperLibraryController: ObservableObject {
       try? await Task.sleep(nanoseconds: 100_000_000)
     }
     guard reviewController?.isRunning != true, chatController?.isRunning != true else {
-      notice = "Deletion is waiting for the active Codex operation to stop. Try again in a moment."
+      notice = "Deletion is waiting for the active Claude operation to stop. Try again in a moment."
       activityLog.append(level: .warning, notice ?? "Paper deletion is waiting.")
       return false
     }
@@ -327,6 +357,7 @@ final class PaperLibraryController: ObservableObject {
       #endif
       reviewControllers[paperID] = nil
       chatControllers[paperID] = nil
+      notesModels[paperID] = nil
       tagsByPaper[paperID] = nil
       reload()
       guard !receipt.fileCleanupPending else {

@@ -57,7 +57,7 @@ public struct ReviewGenerationRecord: Equatable, Sendable {
 
 /// A concise, app-owned projection of a review turn for the paper chat transcript.
 /// The complete production prompt remains in the private generation workspace and
-/// in the Codex thread; the transcript only needs enough context to make the
+/// in the Claude session; the transcript only needs enough context to make the
 /// shared review/chat conversation understandable without duplicating it.
 public enum ReviewChatProjection {
   public static func request(paperTitle: String) -> String {
@@ -66,6 +66,9 @@ public enum ReviewChatProjection {
     let title = String(normalized.prefix(512))
     return "Generate a Papertrail document for “\(title)” from the paper and completed conversation captured when generation was requested. Keep paper evidence separate from discussion interpretations, hypotheses, and open questions."
   }
+
+  /// Item ID of the fixed summary that stands in for the returned review document in chat.
+  public static let completedItemID = "papertrail-review-completed"
 
   public static let completedFallback =
     "Review generation completed. Papertrail is validating and preparing the generated review."
@@ -92,7 +95,7 @@ public protocol ReviewGenerationStore: Sendable {
     promptSHA256: String, journalRelativePath: String,
     predecessorGenerationID: UUID?
   ) throws -> ReviewSessionRecord
-  func recordProcessResult(generationID: UUID, result: CodexTransportResult) throws
+  func recordProcessResult(generationID: UUID, result: AgentTransportResult) throws
   func recordPreparationFailure(generationID: UUID, outcome: ProcessOutcome) throws
   func transitionProcess(generationID: UUID, to: ProcessOutcome) throws
   func transitionStructure(generationID: UUID, to: StructuralValidationState) throws

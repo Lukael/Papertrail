@@ -3,15 +3,15 @@
 ## 1. 개요
 
 Papertrail은 로컬 PDF 논문을 보관하고, 논문별 대화를 이어 가며, 사용자가 요청할 때
-논문 본문과 그 시점까지 완료된 대화를 종합한 구조화 문서를 Codex CLI로 생성하는 macOS 앱이다.
+논문 본문과 그 시점까지 완료된 대화를 종합한 구조화 문서를 Claude Code CLI로 생성하는 macOS 앱이다.
 논문 원본, 생성 문서 버전, 채팅 기록, 실행 저널은
 사용자의 로컬 Application Support 영역에 저장된다.
 
 주요 목표는 다음과 같다.
 
-- 논문별로 독립적인 로컬 데이터와 Codex 대화 맥락을 유지한다.
+- 논문별로 독립적인 로컬 데이터와 Claude 대화 맥락을 유지한다.
 - 사용자가 명시적으로 생성한 종합 문서를 검증 가능한 정적 HTML 버전으로 보존한다.
-- Codex 실행의 인자·작업 폴더·기록을 제한하고, 실패해도 기존 리뷰와 기록을 보존한다.
+- Claude 실행에 도구를 주지 않고 입력·출력을 앱이 소유하며, 실패해도 기존 리뷰와 기록을 보존한다.
 
 ## 2. 실행 환경과 구성
 
@@ -20,9 +20,9 @@ Papertrail은 로컬 PDF 논문을 보관하고, 논문별 대화를 이어 가�
 | 플랫폼 | macOS |
 | UI | SwiftUI |
 | 영속 저장소 | SwiftData 앱 빌드, portable JSON 저장소 테스트 경로 |
-| Codex 실행 | 로컬 `codex exec` 자식 프로세스 |
+| Claude 실행 | 로컬 `claude -p --output-format stream-json` 자식 프로세스 (도구 없음) |
 | 앱 번들 | `Papertrail.app` |
-| 기본 Codex 설정 | GPT-5.6 Terra / Medium |
+| 기본 Claude 설정 | Claude default / Model default |
 
 앱 데이터의 기본 위치는 `~/Library/Application Support/Papertrail`이다. 기존
 `PersonalPaperReview` 저장소는 대상 폴더가 아직 없을 때만 안전하게 이전한다. 대상이
@@ -37,21 +37,32 @@ Papertrail은 로컬 PDF 논문을 보관하고, 논문별 대화를 이어 가�
 - 사이드바 논문 항목의 우클릭 메뉴에서 **Rename…**을 선택해 이름을 수정한다. 공백만 있는
   이름은 저장할 수 없으며, 정규화된 표시 제목을 영속 저장한다.
 - 사이드바 항목의 우클릭 메뉴에서 **Delete Paper…**를 실행할 수 있다.
-- 삭제 확인 후 원본 PDF, 모든 리뷰 버전, 채팅 메시지, Codex 세션·작업 저널, 증거 자료,
+- 삭제 확인 후 원본 PDF, 모든 리뷰 버전, 채팅 메시지, Claude 세션·작업 저널, 증거 자료,
   이전 버전에서 남은 자동 리뷰 요청을 함께 삭제한다. 다른 논문의 데이터는 보존한다.
 
-### 3.2 Codex 모델 선택
+### 3.2 Claude 모델 선택
 
 툴바의 단일 모델 메뉴는 다음 계층 구조를 사용한다.
 
-1. 모델을 선택한다.
-2. 선택한 모델의 하위 메뉴에서 reasoning effort를 선택한다.
+1. 모델 계열(Claude Opus, Claude Sonnet, Claude Haiku)을 선택한다.
+2. 선택한 계열의 하위 메뉴에서 effort(Low, Medium, High, Extra High, Max)를 선택한다.
 
-지원 Effort는 `Low`, `Medium`, `High`, `Extra High`다. 선택값은 UserDefaults에 저장되며
-이후의 문서 생성, 새 채팅, 채팅 재개와 재시도에 적용된다.
+툴바에는 **Chat**과 **Review** 메뉴가 따로 있다. 채팅 turn과 리뷰 문서는 각자의 모델·effort를
+쓰므로, 예를 들어 긴 근거 종합은 Opus·High로, 대화는 Sonnet·Medium으로 둘 수 있다.
 
-모델 선택 버튼 옆의 정보 버튼은 로컬 저장 경로, 보존 정책, Review WebView 제한과 Codex
-자식 프로세스 권한 정보를 정보 패널로 표시한다. 이 정보와 Storage 버튼은 논문 작업공간
+Claude Code CLI에는 모델 목록 조회 명령이 없으므로 앱은 `opus`, `sonnet`, `haiku` 계열
+별칭을 고정 목록으로 제공하고, CLI가 각 별칭을 계정에서 사용할 수 있는 최신 모델로 해석한다.
+현재 세 계열은 모두 `--effort low|medium|high|xhigh|max`를 지원한다. **Claude default**는
+`--model`을, **Model default**는 `--effort`를 생략해 CLI 기본값을 사용한다.
+
+선택값은 UserDefaults(채팅: `selectedClaudeModel`, `selectedClaudeReasoningEffort`, 리뷰:
+`selectedClaudeReviewModel`, `selectedClaudeReviewReasoningEffort`)에 저장한다.
+고정 목록 밖의 저장값(이전 Codex 모델 ID 포함)은 `--model`로 전달하지 않고 Claude default로
+되돌린다. 실행 중에는 선택 변경을 차단하며, 변경은 이후의 문서 생성, 새 채팅, 채팅 재개와
+재시도에 적용된다.
+
+모델 선택 버튼 옆의 정보 버튼은 로컬 저장 경로, 보존 정책, Review WebView 제한과 Claude
+자식 프로세스 경계를 정보 패널로 표시한다. 이 정보와 Storage 버튼은 논문 작업공간
 헤더에 상시 표시하지 않는다.
 
 ### 3.3 문서 생성 및 버전 관리
@@ -69,7 +80,17 @@ Papertrail은 로컬 PDF 논문을 보관하고, 논문별 대화를 이어 가�
   준비한다. 대화는 `input/conversation.json`에 ISO 8601 시각과 메시지 ID를 포함해 저장하고,
   2 MiB 상한과 SHA-256을 검증한다. 원본 PDF, HTML 템플릿, 페이지 raster, 이미지 crop과
   asset은 복사하지 않는다.
-- Codex는 작업별 `output/operations/<operation-id>/review.json` 한 파일만 생성한다.
+- Claude는 리뷰 JSON 문서 하나를 최종 응답으로 반환하고, 앱이 그 문서를 작업별
+  `output/operations/<operation-id>/review.json`에 직접 쓴다. 이 경로에 앱보다 먼저 존재하는
+  파일이나 심볼릭 링크가 있으면 결과를 거부한다.
+- 생성 turn은 `--include-partial-messages`로 실행한다. 앱은 응답 조각에서 schema의 최상위 키와
+  `exactExcerpt` 수를 읽어 "Writing review: evidence (10 of 11) · 13 evidence excerpts" 같은 진행 줄을
+  만들고, 경과 시간과 함께 5초마다 갱신한다. 조각은 저널에 기록하지 않는다.
+- 반환 문서가 형식·schema·근거 검증에서 거부되면 **같은 Claude 세션을 한 번 resume**해 오류 목록만
+  보내고 전체 수정본을 받는다. 논문 텍스트는 캐시에서 다시 읽으므로 재전송하지 않는다. 거부된 시도는
+  `review.attempt-1.json`·`semantic-validation.attempt-1.json`, 교정 turn 저널은 `correction-1/`에 보존한다.
+  두 번째도 거부되거나 경로 조작이 감지되면 승격하지 않는다.
+- 승격 시 상태와 로그에 모델·소요 시간·비용(교정 포함 합계)을 함께 기록한다.
 - JSON은 화면 표시 형식이 아니라 검증 가능한 중간 산출물이다. 앱이 허용 필드, 타입, 크기,
   참조 무결성과 논문 근거를 검사한 뒤 자체 HTML 렌더러로 동일한 화면을 결정적으로 만들기
   때문에, 모델이 임의 HTML·스크립트·원격 리소스를 직접 만들 수 없다.
@@ -92,16 +113,17 @@ Paper/Review 분할 여부와 관계없이 할당된 패널의 전체 높이를 
 
 ### 3.4 통합 동작 로그
 
-Review 패널 안에는 별도의 `Live Codex activity` 영역을 두지 않는다. 앱 전체 하단바에서
-Codex 진행 이벤트와 프로그램 동작 이벤트를 함께 표시한다.
+Review 패널 안에는 별도의 live activity 영역을 두지 않는다. 앱 전체 하단바에서
+Claude 진행 이벤트와 프로그램 동작 이벤트를 함께 표시한다.
 
 - 기본 하단바에는 가장 최근 로그를 한 줄로 표시한다.
-- 오른쪽 확장 버튼은 시간, 출처(App/Codex), 수준, 메시지를 포함한 스크롤 로그 히스토리를 연다.
-- `thread.started`, `turn.started`, 완료/실패 이벤트와 제한된 reasoning 요약, agent response를 기록한다.
+- 오른쪽 확장 버튼은 시간, 출처(App/Claude), 수준, 메시지를 포함한 스크롤 로그 히스토리를 연다.
+- 세션 시작(`system/init`), 완료/실패(`result`) 이벤트와 제한된 thinking 요약, 응답을 기록한다.
+  리뷰 생성의 응답은 JSON 문서이므로 내용 대신 수신 사실만 기록한다.
 - 가져오기, 문서 생성·선택·취소, 채팅·재시도·컨텍스트 갱신, 복구와 오류를 프로그램 로그로 기록한다.
-- 같은 Codex 항목의 후속 업데이트는 덮어써 중복을 줄이고 최근 500개 항목만 메모리에 유지한다.
+- 같은 메시지 항목의 후속 업데이트는 덮어써 중복을 줄이고 최근 500개 항목만 메모리에 유지한다.
 
-원시 `reasoning.delta`, 명령 출력, 민감한 파일 내용은 표시하지 않는다. 즉, 이 UI는
+부분 스트림 이벤트, 도구 기록, Claude Code가 만든 synthetic 오류 메시지는 응답으로 표시하지 않는다. 즉, 이 UI는
 상세 chain-of-thought가 아니라 사용자가 확인할 수 있는 진행 요약과 응답 상태를 제공한다.
 
 ### 논문 목록 정렬
@@ -127,17 +149,17 @@ Codex 진행 이벤트와 프로그램 동작 이벤트를 함께 표시한다.
 없으면 빈 태그로 취급하며 기존 데이터베이스 스키마는 바꾸지 않는다. 태그는 논문 ID에
 연결되므로 이름 변경이나 정렬에 영향받지 않고 논문 폴더 삭제와 함께 제거된다.
 최초 로드 후 메모리 캐시를 사용해 읽기 위치 변경마다 태그 파일을 다시 읽지 않는다.
-태그는 제목 검색 대상이나 Codex 생성 입력에 포함되지 않는다.
+태그는 제목 검색 대상이나 Claude 생성 입력에 포함되지 않는다.
 
 ### 3.5 논문별 채팅
 
 - 채팅은 논문마다 하나의 현재 세션을 가진다.
 - 입력창은 채팅 패널의 하단 고정 레이아웃 요소다. 메시지 목록만 스크롤하므로 하단 저장소
   표시줄과 겹치지 않는다.
-- 전송을 누르면 영속 저장과 Codex 실행이 끝나기 전에도 사용자 메시지를 즉시 임시 말풍선으로
+- 전송을 누르면 영속 저장과 Claude 실행이 끝나기 전에도 사용자 메시지를 즉시 임시 말풍선으로
   표시하고, durable message가 로드되면 같은 대화 목록을 저장 결과로 교체한다.
-- 응답 중에는 assistant 행에 `Thinking`/`Responding` 상태, 제한된 reasoning 요약과 현재
-  agent response를 실시간으로 표시한다. 원시 reasoning delta나 상세 chain-of-thought는 노출하지 않는다.
+- 응답 중에는 assistant 행에 `Thinking`/`Responding` 상태, 제한된 thinking 요약과 완성된
+  응답 블록을 표시한다. 현재 모델은 thinking 원문을 반환하지 않으며 앱도 요청하지 않는다.
 - 전송, 취소, 실패 메시지 재시도, 컨텍스트 새로 고침을 지원한다.
 - 메시지와 작업 상태는 앱이 영속 저장하며 재실행 후에도 복구한다.
 - 모든 사용자/assistant 메시지 행에 저장된 생성 날짜와 분 단위 시각을 표시한다. 도움말에는
@@ -152,38 +174,93 @@ Codex 진행 이벤트와 프로그램 동작 이벤트를 함께 표시한다.
 - 실제 디렉터리 제거가 검증되지 않으면 UI는 삭제 성공으로 표시하지 않는다.
 - 사용자가 가져온 원본 외부 PDF는 앱 소유 파일이 아니므로 삭제하지 않는다.
 
-## 4. 문서 생성과 채팅의 Codex 세션 경계
+## 4. 문서 생성과 채팅의 Claude 세션 경계
 
-문서 생성과 논문 채팅은 서로 다른 외부 Codex thread를 사용한다. 생성 입력에 채팅
-스냅샷이 포함되더라도 외부 thread를 공유하거나 채팅 thread를 resume하지 않는다.
+문서 생성과 논문 채팅은 서로 다른 Claude Code 세션을 사용한다. 생성 입력에 채팅
+스냅샷이 포함되더라도 세션을 공유하거나 채팅 세션을 resume하지 않는다.
 
-- 각 generation은 격리된 `reviewGeneration` 세션과 새 thread에서 시작한다. 논문 텍스트와
-  클릭 시점의 완료된 채팅 스냅샷을 명시적 입력으로 받는다.
-- 논문별 채팅은 하나의 현재 `paperChat` 세션을 `resume`하여 대화를 이어 간다. 문서 생성
-  스냅샷은 현재 포인터 하나에 한정하지 않고, 같은 논문에 속한 모든 `paperChat` 세션에서
-  성공적으로 완료·커밋된 메시지를 클릭 시각까지 모은다.
-- 검증·승격된 선택 리뷰는 새 채팅 세션을 만들거나 컨텍스트를 새로 고칠 때 읽기 전용 로컬
-  컨텍스트로 staging한다. 따라서 채팅은 리뷰 결과를 참조하지만 리뷰 생성 thread에 의존하지 않는다.
-- 리뷰 production prompt와 생성 메시지는 해당 generation workspace·세션에만 저장하고 일반
-  채팅 transcript에 복제하지 않는다.
+- 각 generation은 격리된 `reviewGeneration` 레코드와 새 Claude 세션에서 실행한다. 논문 텍스트와
+  클릭 시점의 완료된 채팅 스냅샷을 표준 입력으로 받으며, 세션은 검증 실패 시 교정 turn에만 이어 쓴다.
+- 논문별 채팅은 하나의 현재 `paperChat` 세션을 `--resume <session-id>`로 이어 간다. 첫 turn은
+  bootstrap, 검증된 논문 텍스트, 선택 리뷰의 텍스트를 함께 보내고, 이후 turn은 사용자 메시지만
+  보낸다. 세션 ID는 첫 turn이 **완료된 경우에만** 저장한다. 실패·중단된 첫 turn은 이어 갈 대화를
+  남기지 않았을 수 있으므로 다음 전송이 새 세션으로 다시 시작한다.
+- Claude Code는 세션 기록을 작업 폴더 기준으로 찾으므로 채팅 workspace 경로는 세션 수명 동안
+  바뀌지 않는다. 논문 원본 변경, 캐시 텍스트 변조, 프롬프트 개정은 기존처럼 이전 대화 transcript를
+  담은 새 세션으로 교체한다.
+- 리뷰 생성 결과(JSON)는 채팅 transcript에 복제하지 않고, 생성 세션에 고정 요약 문구만 남긴다.
 
-두 작업은 thread와 workspace가 분리되어 서로의 대화 상태나 생성 파일을 덮어쓰지 않는다.
+두 작업은 세션과 workspace가 분리되어 서로의 대화 상태나 생성 파일을 덮어쓰지 않는다.
 
-## 5. Codex 실행 계약
+## 5. Claude 실행 계약
 
-Codex 프로세스는 인자를 쉘 문자열로 조합하지 않고, 허용된 인자 배열과 표준 입력으로
-실행한다.
+Claude Code 프로세스는 인자를 쉘 문자열로 조합하지 않고, 허용된 인자 배열과 표준 입력으로
+실행한다. 모든 turn은 다음 고정 접두사로 시작한다.
 
-- 모델 식별자와 Effort 값은 검증된 allowlist 형식만 허용한다.
-- 리뷰·채팅은 `--ignore-user-config`를 사용해 사용자 전역 Codex 설정의 영향을 줄인다.
-- Homebrew 안정 Codex 경로를 우선하고, 사용할 수 없으면 다른 검증 가능한 후보를 사용한다.
-- 새 작업은 `workspace-write` sandbox를 요청한다.
-- resume 작업은 Codex CLI의 별도 옵션 표면을 따라 이전 turn 정책을 유지한다.
-- stdout JSONL은 프레이밍·프로젝션·저널 기록을 거친다.
-- stderr와 저널 크기는 제한되며, 자식 프로세스 그룹은 취소·타임아웃 때 종료 요청을 받는다.
+```text
+claude -p --output-format stream-json --verbose --tools "" --strict-mcp-config
+       --setting-sources "" --permission-mode dontAsk --system-prompt <app-owned prompt>
+       [--model <alias>] [--effort <level>] [--no-session-persistence | --resume <session-id>]
+```
 
-`--ignore-user-config`는 사용자 구성·hook·MCP 설정의 영향을 줄이는 장치다. 전역
-`AGENTS.md` 등 모든 전역 지시를 완전히 제거한다고 보장하지는 않는다.
+- **도구 없음:** `--tools ""`로 파일·셸·웹 도구를 모두 제거한다. 모델은 앱이 표준 입력으로 준
+  논문 텍스트·대화만 보고, 출력은 stream-json 이벤트로만 돌려준다. 그래서 신뢰할 수 없는 논문
+  텍스트의 프롬프트 주입이 파일을 읽거나 쓰거나 네트워크에 접근할 경로가 없다. `system/init`
+  이벤트가 도구를 하나라도 보고하거나 응답에 tool use가 나타나면 protocol failure로 처리한다.
+- **설정 격리:** `--setting-sources ""`는 사용자·프로젝트 설정(hook, plugin, 권한 규칙)을,
+  `--strict-mcp-config`는 MCP 서버를 배제한다. 시스템 프롬프트는 앱이 소유하며 Claude Code의
+  기본 코딩 에이전트 프롬프트를 대체한다.
+- **허용 인자:** 모델 식별자, effort, 세션 ID, 시스템 프롬프트는 형식을 검증하고 `-`로 시작하는
+  값을 거부한다. `--dangerously-skip-permissions`, `--add-dir`, `--mcp-config`, `--settings`,
+  `--fork-session` 등은 거부 목록으로 막는다.
+- **입력 경계:** 논문 텍스트·대화·선택 리뷰는 내용의 SHA-256을 포함한 시작/끝 표시로 감싼다.
+  내용이 자기 자신의 해시를 포함할 수 없으므로 인용된 텍스트가 끝 표시를 위조해 앱 지시처럼
+  이어질 수 없다. 표준 입력의 인라인 데이터는 3 MiB로 제한하고 넘으면 잘라내지 않고 실패시킨다.
+- **환경:** 자식 프로세스는 앱 환경을 물려받지 않는다. HOME·로케일·인증서 경로만 허용하고,
+  API 키·프록시·`CLAUDE_*` 재정의는 전달하지 않으며 자동 업데이트와 부가 트래픽을 끈다.
+  인증은 사용자가 `claude auth login`으로 마친 Claude Code 로그인을 사용한다.
+- **실행 파일 확인:** Homebrew, 네이티브 설치(`~/.local/bin`), PATH 후보 순으로 `claude --version`,
+  `claude --help`의 필수 옵션, `claude auth status`를 확인한다. 로그인되지 않은 경우 실행 전에
+  `claude auth login` 안내를 표시한다.
+- **완료 판정:** `result` 이벤트가 정확히 하나여야 한다. `is_error: true`이면 실패이며(인증 실패도
+  `subtype: "success"`와 함께 이 방식으로 보고된다), 성공 결과와 종료 코드 0이 함께 있어야 완료다.
+  모델명이 `<synthetic>`인 메시지는 CLI가 만든 오류 안내이므로 assistant 응답으로 저장하지 않는다.
+- **거절과 오류 안내:** 안전 분류기 거절(`stop_reason: "refusal"`, `system/model_refusal_no_fallback`)과
+  인증·API 오류는 실패한 turn으로 기록하고, CLI가 보낸 원인·해결 문단을 채팅·리뷰 상태에 함께
+  표시한다. `--fallback-model`은 거절에 적용되지 않으므로 사용하지 않는다.
+- stdout JSONL은 프레이밍·프로젝션·저널 기록을 거친다. 스트리밍 중 반복되는
+  `system/thinking_tokens` 추정치는 상태를 담지 않으므로 저널에 쓰지 않고, 약 500토큰마다
+  진행 표시로만 반영한다. stderr와 저널 크기는 제한되며, 자식 프로세스 그룹은 취소·타임아웃 때
+  종료 요청을 받는다.
+
+### 5.2 실제 CLI 확인 결과 (Claude Code 2.1.231, 2026-10-15)
+
+- 격리 인자로 실행한 `system/init`은 `tools: []`, `mcp_servers: []`, `plugins: []`,
+  `permissionMode: dontAsk`를 보고했다.
+- `--resume`은 같은 세션 ID를 유지하고 이전 turn 내용을 기억했다. 저장된 세션 기록에는 사용자·
+  assistant 메시지만 있었다.
+- 작업 폴더와 상위 폴더에 CLAUDE.md를 둔 시험에서 기본 실행은 두 파일의 지시를 모두 받았고,
+  `--setting-sources ""` 실행은 어느 쪽도 받지 않았다.
+- 합성 논문과 대화로 실제 리뷰 생성을 끝까지 실행해 JSON 반환, 검증, 렌더링, 승격을 확인했다.
+- 실제 논문(31쪽) 재생성에서 Sonnet·Medium 첫 응답이 인용·참조 오류 13건으로 거부되었고, 같은
+  세션 교정 turn이 이를 해결해 승격되었다(첫 turn $0.62, 교정 $0.46 · 논문 3.9만 토큰 캐시 재사용).
+- 별칭 해석은 CLI 버전에 따른다. 이 버전에서 기본 모델과 `opus`는 `claude-opus-5`, `haiku`는
+  `claude-haiku-4-5`로 해석되었다.
+- 실제 라이브러리 사본(논문 11편)으로 릴리스 앱을 실행해 1회 정리(채팅 세션 6개·작업 30개 삭제,
+  리뷰 진행 메시지 16개를 요약 2개로 교체, 리뷰 버전 유지)를 확인했다. 같은 앱에서 채팅 첫 turn과
+  `--resume` 후속 turn이 SwiftData 저장소에 커밋되었고, 논문 텍스트 캐시 덕분에 후속 turn 비용은 첫
+  turn의 약 7%였다.
+
+### 5.1 Codex에서의 전환
+
+Codex thread ID는 Claude Code에서 resume할 수 없으므로, 전환 후 첫 실행 때 한 번만 Codex 채팅
+세션과 그 작업·메시지, 각 논문의 `chat` 작업 폴더, legacy 채팅 포인터 파일을 삭제한다.
+논문, 리뷰 생성 기록, 리뷰 버전과 리뷰 세션 레코드는 보존한다. 리뷰 세션에 남은 Codex 진행
+메시지는 지우고, 완료된 생성에는 새 생성과 같은 고정 요약 한 줄을 결정적 ID와 원래 시각으로 남긴다.
+전환 안내는 detail 열 상단에 표시하며 사용자가 닫을 수 있다. 저장소 변경을 먼저 커밋하고
+`Store/agent-provider-claude.json` 표시 파일을 마지막에 쓰므로 중단되어도 다음 실행에서 안전하게
+반복된다. 영속 모델 이름 `CodexSession`/`CodexOperation`은 기존 저장소를 마이그레이션 없이 열기
+위해 유지하며, `externalThreadID`에는 Claude Code 세션 ID를 저장한다.
 
 ## 6. 데이터와 작업 수명주기
 
@@ -192,7 +269,7 @@ Codex 프로세스는 인자를 쉘 문자열로 조합하지 않고, 허용된 
 | 모델 | 역할 |
 | --- | --- |
 | `Paper` | 논문 메타데이터, 원본 위치, 현재 채팅 세션, 선택된 리뷰 버전 |
-| `CodexSession` | 논문별 chat purpose, 외부 Codex thread ID, 작업 공간, 계보 |
+| `CodexSession` | 논문별 chat purpose, Claude Code 세션 ID(`externalThreadID`), 작업 공간, 계보 (저장 이름 유지) |
 | `CodexOperation` | 리뷰/채팅 turn의 실행 상태, 종료 정보, 저널 위치 |
 | `ReviewGeneration` | 문서 생성 시도, 고정 입력 스냅샷, generation workspace, 검증·승격 상태 |
 | `ChatMessage` | 사용자/assistant 메시지, 초안·커밋·실패 상태 |
@@ -206,8 +283,9 @@ Codex 프로세스는 인자를 쉘 문자열로 조합하지 않고, 허용된 
    준비하고 입력 파일을 읽기 전용으로 잠근다. 대화 스냅샷이 2 MiB를 넘으면 일부를 조용히
    잘라내지 않고 생성 요청을 실패시킨다.
 4. 격리된 review generation session, operation, 요청 요약 메시지를 영속화한다.
-5. Codex를 새 thread로 실행하고 JSONL 이벤트를 저널링한다.
-6. 작업 소유 `review.json`의 schema, 논문 근거 관계, 토론 기반 항목의 메시지 출처를 검증한다.
+5. Claude를 도구 없는 일회성 turn으로 실행하고 JSONL 이벤트를 저널링한다.
+6. 최종 응답의 JSON 문서를 앱이 `review.json`에 쓰고, schema, 논문 근거 관계, 토론 기반 항목의
+   메시지 출처를 검증한다.
 7. 앱 소유 렌더러가 정적 HTML을 만들고, 안전성 검증을 통과한 결과만 불변 버전으로
    승격·선택한다.
 
@@ -223,7 +301,10 @@ Codex 프로세스는 인자를 쉘 문자열로 조합하지 않고, 허용된 
 - 생성 입력에 포함된 채팅도 신뢰할 수 없는 토론 데이터로 취급하며, 그 안의 지시를 실행하지
   않고 종합 대상 내용으로만 사용한다.
 - 리뷰 입력 텍스트 사본은 읽기 전용으로 만들고, 생성 중 변조되면 결과를 격리한다.
-- Codex 산출물은 bounded UTF-8 `review.json`만 허용하며 HTML과 binary asset은 앱이 받지 않는다.
+- Claude 응답은 bounded UTF-8 JSON 문서 하나만 허용하며(512 KiB, 앞뒤 설명 문장 불가), HTML과
+  binary asset은 앱이 받지 않는다.
+- Claude에는 도구가 없으므로 workspace의 파일은 앱만 쓰며, 실행 중 입력 사본이 바뀌면 외부 변조로
+  보고 결과를 격리한다.
 - parent traversal, 절대 경로, 심볼릭 링크, 원격 URL, 스크립트, 이벤트 handler 등은
   검증·정화 단계에서 거부한다.
 - operation journal은 소유권·inode·링크 수·크기 확인을 수행하며 tampering을 감지한다.
@@ -239,20 +320,21 @@ codesign --verify --deep --strict Papertrail.app
 ```
 
 릴리스 번들은 프로젝트 루트의 `Papertrail.app`에 생성된다. portable 저장소를 사용하는 Gate
-회귀 테스트와 실제 Codex 생성·격리 UI 시나리오의 명령 및 최신 결과는
+회귀 테스트와 실제 Claude 생성·격리 UI 시나리오의 명령 및 최신 결과는
 [문서와 검증](Docs/README.md)을 따른다. Command Line Tools 환경에서 만든 일반 `swift build`
 산출물은 portable schema 경로이므로
 실제 SwiftData 앱 번들 검증을 대신하지 않는다.
 
 새 제품 계약의 회귀 검증 범위에는 다음이 포함되어야 한다.
 
-- Codex 인자 경계, JSONL 처리, 저널 보호, 취소 및 출력 제한
+- Claude 인자 경계, 도구 비활성 검증, stream-json 처리, 저널 보호, 취소 및 출력 제한
 - 실시간 진행 이벤트의 필터링·크기 제한
 - 채팅 세션 지속성, 재시도, resume, 복구, cross-paper 차단
 - 문서 생성·재생성·실패·취소·승격 복구·읽기 전용 고정 입력 스냅샷
 - 생성 클릭 이전의 완료 메시지만 포함하고 클릭 이후·초안·진행 중·실패 메시지는 제외하는 경계
 - 채팅 없는 논문의 paper-only 생성과 논문 근거/토론 질문·해석·가설·열린 질문의 구분
-- 문서 생성/채팅 분리 세션과 생성 thread에 대한 논문+채팅 스냅샷 전달
+- 문서 생성/채팅 분리 세션과 생성 turn에 대한 논문+채팅 스냅샷 전달
+- Codex 채팅 1회 정리와 리뷰 기록 보존
 
 과거 Gate의 “가져오기 또는 재실행 시 자동 리뷰 요청 실행”과 “리뷰/채팅 공유 세션” 기대는
 이 기획에서 폐기되었으며, 현재 Gate 테스트는 사용자 시작 조건과 분리 세션 계약을 검증하도록

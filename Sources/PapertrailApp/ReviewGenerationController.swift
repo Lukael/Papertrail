@@ -15,19 +15,24 @@ final class ReviewGenerationController: ObservableObject {
   let paperID: UUID
   let paths: LibraryPaths
   let model: String?
-  let reasoningEffort: CodexReasoningEffort
+  let reasoningEffort: AgentReasoningEffort
   private let store: any ReviewGenerationStore
   private let conversationProvider: () throws -> ReviewConversationSnapshot
   private let activityLog: AppActivityLog
-  private let executableProvider: CodexExecutableProvider
-  private var cancellation: CodexCancellationToken?
+  private let executableProvider: AgentExecutableProvider
+  private var cancellation: AgentCancellationToken?
+  /// One log line per run that carries the latest progress plus elapsed time, refreshed even
+  /// while Claude is silently thinking so a long generation never looks stalled.
+  private var liveStatus = "Claude is reading the paper and planning the review"
+  private var runStartedAt: Date?
+  private var heartbeat: Task<Void, Never>?
 
   #if PPR_PORTABLE_SCHEMA
     convenience init(
       paperID: UUID, paths: LibraryPaths, store: DurableModelStore, model: String?,
-      reasoningEffort: CodexReasoningEffort,
+      reasoningEffort: AgentReasoningEffort,
       activityLog: AppActivityLog,
-      executableProvider: CodexExecutableProvider
+      executableProvider: AgentExecutableProvider
     ) {
       self.init(
         paperID: paperID,
@@ -42,9 +47,9 @@ final class ReviewGenerationController: ObservableObject {
   #else
     convenience init(
       paperID: UUID, paths: LibraryPaths, container: ModelContainer, model: String?,
-      reasoningEffort: CodexReasoningEffort,
+      reasoningEffort: AgentReasoningEffort,
       activityLog: AppActivityLog,
-      executableProvider: CodexExecutableProvider
+      executableProvider: AgentExecutableProvider
     ) {
       self.init(
         paperID: paperID,
@@ -64,10 +69,10 @@ final class ReviewGenerationController: ObservableObject {
     paths: LibraryPaths,
     reviewStore: any ReviewGenerationStore,
     model: String?,
-    reasoningEffort: CodexReasoningEffort,
+    reasoningEffort: AgentReasoningEffort,
     conversationProvider: @escaping () throws -> ReviewConversationSnapshot,
     activityLog: AppActivityLog,
-    executableProvider: CodexExecutableProvider
+    executableProvider: AgentExecutableProvider
   ) {
     self.paperID = paperID
     self.paths = paths
@@ -91,11 +96,21 @@ final class ReviewGenerationController: ObservableObject {
     return (try? location.resolve()) == nil ? nil : location
   }
 
+  var selectedVersionID: UUID? { (try? store.paper(id: paperID))?.selectedReviewVersionID }
+
+  /// Verified excerpts of the selected review, read from its rendered document.
+  func selectedEvidence() -> [ReviewEvidenceAnchor] {
+    guard let indexURL = try? selectedReviewLocation?.resolve().indexURL,
+      let html = try? String(contentsOf: indexURL, encoding: .utf8)
+    else { return [] }
+    return ReviewEvidenceAnchor.anchors(inReviewHTML: html)
+  }
+
   func generate() {
     guard !isRunning else { return }
     let conversation: ReviewConversationSnapshot
     do {
-      // Capture at the button click boundary so messages sent while Codex is resolving
+      // Capture at the button click boundary so messages sent while Claude Code is resolving
       // belong to the next synthesis rather than changing this one underneath it.
       conversation = try conversationProvider()
     } catch {
@@ -104,15 +119,15 @@ final class ReviewGenerationController: ObservableObject {
       return
     }
     isRunning = true
-    status = "Checking Codex CLI compatibility…"
+    status = "Checking Claude Code compatibility…"
     Task {
       do {
         let executable = try await executableProvider.executableURL()
         beginGeneration(conversation: conversation, executable: executable)
       } catch {
         status =
-          "Codex CLI could not be resolved. Existing reviews remain readable: \(error.localizedDescription)"
-        activityLog.append(level: .error, status ?? "Codex CLI resolution failed.")
+          "Claude Code could not be used. Existing reviews remain readable: \(error.localizedDescription)"
+        activityLog.append(level: .error, status ?? "Claude Code resolution failed.")
         isRunning = false
       }
     }
@@ -124,11 +139,20 @@ final class ReviewGenerationController: ObservableObject {
     let identity = ReviewGenerationIdentity()
     status = "Synthesizing the paper and conversation into a new review version…"
     activityLog.append(level: .info, status ?? "Review generation started.")
-    let token = CodexCancellationToken()
+    let token = AgentCancellationToken()
     cancellation = token
+    runStartedAt = Date()
+    liveStatus = "Claude is reading the paper and planning the review"
+    heartbeat = Task { [weak self] in
+      while !Task.isCancelled {
+        try? await Task.sleep(for: .seconds(5))
+        guard let self, self.isRunning, !Task.isCancelled else { return }
+        self.refreshLiveLine()
+      }
+    }
     let predecessor = generations.last?.id
     let service = ReviewGenerationService(paths: paths, store: store)
-    let progressHandler: @Sendable (CodexLiveProgress) -> Void = { [weak self] update in
+    let progressHandler: @Sendable (AgentLiveProgress) -> Void = { [weak self] update in
       Task { @MainActor [weak self] in self?.appendLiveProgress(update) }
     }
     Task {
@@ -147,6 +171,7 @@ final class ReviewGenerationController: ObservableObject {
       case .success(let value):
         status = value.label + (value.structuralValidation == .passed
           ? " · source excerpts verified" : "")
+          + (value.runSummary.map { " · \($0)" } ?? "")
         activityLog.append(
           level: value.versionID == nil ? .warning : .success,
           status ?? "Review generation completed.")
@@ -156,21 +181,41 @@ final class ReviewGenerationController: ObservableObject {
         status = failureStatus
         activityLog.append(level: .error, failureStatus)
       }
+      heartbeat?.cancel()
+      heartbeat = nil
       cancellation = nil
       isRunning = false
       reload()
     }
   }
 
-  private func appendLiveProgress(_ update: CodexLiveProgress) {
+  private func appendLiveProgress(_ update: AgentLiveProgress) {
+    // The service summarizes raw deltas into section progress before they reach the controller.
+    guard update.kind != .draft else { return }
+    if update.itemID == "review-draft" || update.itemID == "thinking-tokens" {
+      liveStatus = update.text
+      refreshLiveLine()
+      return
+    }
     let level: AppActivityLogLevel = update.kind == .reasoning ? .debug : .info
+    // The response is the raw review JSON; the log notes its arrival instead of echoing it.
+    let message =
+      update.kind == .response ? "Received the review document; validating it…" : update.text
     if let itemID = update.itemID {
       activityLog.upsert(
-        key: "review:\(paperID.uuidString):\(itemID)", source: .codex, level: level,
-        message: update.text)
+        key: "review:\(paperID.uuidString):\(itemID)", source: .agent, level: level,
+        message: message)
     } else {
-      activityLog.append(source: .codex, level: level, update.text)
+      activityLog.append(source: .agent, level: level, message)
     }
+  }
+
+  private func refreshLiveLine() {
+    let elapsed = Int(Date().timeIntervalSince(runStartedAt ?? Date()))
+    let clock = elapsed >= 60 ? "\(elapsed / 60)m \(elapsed % 60)s" : "\(elapsed)s"
+    activityLog.upsert(
+      key: "review:\(paperID.uuidString):live", source: .agent,
+      message: "\(liveStatus) · \(clock)")
   }
 
   func cancel() {
