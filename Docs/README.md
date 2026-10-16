@@ -6,11 +6,13 @@
 
 ## 최신 릴리즈
 
-[v1.2.0 릴리즈 노트](Releases/v1.2.0.md)에 PDF 검색·채팅 줄바꿈·다크 모드 수정과 검증 범위를 정리합니다.
+[v2.0.0 릴리즈 노트](Releases/v2.0.0.md)에 Claude Code 전환, 발표 형식 리뷰, PDF 근거 연결과
+하이라이트·메모, 검증 범위를 정리합니다.
+PDF 검색·채팅 줄바꿈·다크 모드 수정은 [v1.2.0](Releases/v1.2.0.md)을 참고합니다.
 질문 미리보기와 클릭 영역 수정은 [v1.1.2](Releases/v1.1.2.md)를 참고합니다.
 채팅 읽기 화면 개선은 [v1.1.1](Releases/v1.1.1.md)을 참고합니다.
 이전 기능 릴리즈는 [v1.1.0](Releases/v1.1.0.md)을 참고합니다.
-로컬 검증 로그는 `.build/scenarios/release-1.2.0`에 보관합니다.
+로컬 검증 로그는 `.build/scenarios/release-2.0.0`에 보관합니다.
 
 ## 회귀 테스트
 
@@ -106,6 +108,19 @@ swiftc -module-cache-path .build/ModuleCache -parse-as-library \
 .build/scenarios/paper-search-tags/PaperTagsEditorTests
 ```
 
+## 하이라이트와 메모
+
+메모 저장소 검사는 임시 라이브러리에서 저장·다시 읽기, 크기 제한, 심볼릭 링크 거부를 확인합니다.
+PDF 하이라이트 그리기·우클릭 위치 판정·삭제는 아래 PDF 검사에 포함됩니다.
+
+```sh
+mkdir -p .build/scenarios/paper-notes
+swiftc -module-cache-path .build/ModuleCache -parse-as-library -D PPR_PORTABLE_SCHEMA \
+  Sources/PapertrailCore/Storage/LibraryPaths.swift Sources/PapertrailCore/Storage/PaperNoteStore.swift \
+  Tests/PaperNoteStoreTests.swift -o .build/scenarios/paper-notes/PaperNoteStoreTests
+.build/scenarios/paper-notes/PaperNoteStoreTests
+```
+
 ## PDF 검색과 채팅 줄바꿈
 
 ```sh
@@ -113,7 +128,7 @@ sh Scripts/verify-pdf-search.sh
 python3 Scripts/verify-chat-scroll.py --layout-only
 ```
 
-PDF 검사는 생성한 임시 PDF에서 대소문자 무시 검색·페이지 간 결과 이동·검색 해제·문서 전환을 확인합니다. Ctrl+휠·트랙패드 확대·축소, 배율 제한과 읽기 상태 알림, 일반 스크롤·PDF 밖 입력 유지도 검사합니다.
+PDF 검사는 생성한 임시 PDF에서 대소문자 무시 검색·페이지 간 결과 이동·검색 해제·문서 전환을 확인합니다. 근거 위치 찾기(줄 끝 하이픈·합자 포함), 근거 이동, 선택 메뉴, 하이라이트도 검사합니다. Ctrl+휠·트랙패드 확대·축소, 배율 제한과 읽기 상태 알림, 일반 스크롤·PDF 밖 입력 유지도 검사합니다.
 채팅 검사는 실제 입력창 코드에 Shift+Enter를 보내 커서 위치 줄바꿈과 전송 방지를 확인하고, Enter가 한 번 전송되는지 검사합니다. 실제 Claude에는 요청하지 않습니다.
 
 ## 실제 Claude 생성
