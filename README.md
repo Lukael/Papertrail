@@ -26,8 +26,8 @@ SwiftUI·SwiftData를 사용하며 macOS 14 이상에서 실행합니다.
 목록을 우클릭하면 이름을 수정할 수 있습니다. 채팅에는 날짜와 시간이 표시되며,
 메시지 위에 마우스를 올리면 초와 시간대를 포함한 전체 일시를 확인할 수 있습니다.
 PDF·Review 패널은 표시 여부와 너비를 조절할 수 있습니다.
-툴바의 **Chat**·**Review** 메뉴에서 채팅과 문서 생성에 쓸 Claude Opus·Sonnet·Haiku 계열과
-effort(Low~Max)를 각각 고릅니다.
+툴바의 모델 메뉴에서 채팅과 문서 생성에 함께 쓸 Claude Opus·Sonnet·Haiku 계열과
+effort(Low~Max)를 고릅니다.
 Claude Code가 각 계열을 계정에서 쓸 수 있는 최신 모델로 연결하며, **Claude default**와
 **Model default**는 CLI 기본값을 사용합니다. 선택은 재실행 후에도 유지됩니다.
 PDF에서 **⌘F**를 누르면 오른쪽 위 검색창이 열립니다. 검색어를 입력하고 Enter를 누르면 검색하며, 같은 검색어에서 Enter를 다시 누르거나 이전·다음 버튼으로 강조된 검색 결과를 이동합니다. Esc로 닫습니다. 이미지로만 된 PDF는 텍스트 검색 대상이 아닙니다.

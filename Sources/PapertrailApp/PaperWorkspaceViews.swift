@@ -274,12 +274,40 @@ struct PaperLibraryView: View {
     }
     .toolbar {
       ToolbarItemGroup(placement: .automatic) {
-        modelMenu(
-          purpose: "Chat", model: controller.agentModel, effort: controller.agentEffort,
-          select: controller.selectAgentModel)
-        modelMenu(
-          purpose: "Review", model: controller.reviewModel, effort: controller.reviewEffort,
-          select: controller.selectReviewModel)
+        Menu {
+          ForEach(controller.agentModels) { model in
+            Menu {
+              ForEach([AgentReasoningEffort.automatic] + model.supportedEfforts) { effort in
+                Button {
+                  controller.selectAgentModel(model, effort: effort)
+                } label: {
+                  if controller.agentModel == model && controller.agentEffort == effort {
+                    Label(effort.title, systemImage: "checkmark")
+                  } else {
+                    Text(effort.title)
+                  }
+                }
+              }
+            } label: {
+              if controller.agentModel == model {
+                Label(model.title, systemImage: "checkmark")
+              } else {
+                Text(model.title)
+              }
+            }
+          }
+        } label: {
+          Text("\(controller.agentModel.title) · \(controller.agentEffort.title)")
+            .lineLimit(1)
+            .fixedSize(horizontal: true, vertical: false)
+            .frame(minWidth: 170, alignment: .leading)
+        }
+        .fixedSize(horizontal: true, vertical: false)
+        .accessibilityLabel(
+          "Claude model \(controller.agentModel.title), effort \(controller.agentEffort.title)")
+        .help(
+          "Choose a Claude model family and effort level for new operations. Claude Code resolves each family to its newest model."
+        )
         Button("App information", systemImage: "info.circle") {
           showsAppInformation.toggle()
         }
@@ -319,46 +347,6 @@ struct PaperLibraryView: View {
       }
     }
     .animation(.easeOut(duration: 0.16), value: showsAppInformation)
-  }
-
-  /// One model menu per purpose: chat turns and review documents keep separate selections.
-  private func modelMenu(
-    purpose: String, model selected: AgentModelSelection, effort selectedEffort: AgentReasoningEffort,
-    select: @escaping (AgentModelSelection, AgentReasoningEffort) -> Void
-  ) -> some View {
-    Menu {
-      ForEach(controller.agentModels) { model in
-        Menu {
-          ForEach([AgentReasoningEffort.automatic] + model.supportedEfforts) { effort in
-            Button {
-              select(model, effort)
-            } label: {
-              if selected == model && selectedEffort == effort {
-                Label(effort.title, systemImage: "checkmark")
-              } else {
-                Text(effort.title)
-              }
-            }
-          }
-        } label: {
-          if selected == model {
-            Label(model.title, systemImage: "checkmark")
-          } else {
-            Text(model.title)
-          }
-        }
-      }
-    } label: {
-      Text("\(purpose) · \(selected.title) · \(selectedEffort.title)")
-        .lineLimit(1)
-        .fixedSize(horizontal: true, vertical: false)
-        .frame(minWidth: 170, alignment: .leading)
-    }
-    .fixedSize(horizontal: true, vertical: false)
-    .accessibilityLabel("\(purpose) model \(selected.title), effort \(selectedEffort.title)")
-    .help(
-      "Choose the Claude model family and effort level for new \(purpose.lowercased()) operations. Claude Code resolves each family to its newest model."
-    )
   }
 
   @ViewBuilder private var launchNotice: some View {

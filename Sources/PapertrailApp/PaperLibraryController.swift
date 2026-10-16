@@ -18,15 +18,14 @@ final class PaperLibraryController: ObservableObject {
   @Published var notice: String?
   let activityLog = AppActivityLog()
   let agentModels = AgentModelSelection.choices
-  /// Chat turns use `agentModel`; review documents use their own `reviewModel` so a long,
-  /// evidence-heavy synthesis can run at a different model or effort than conversation.
   @Published var agentModel = AgentModelSelection.load() {
     didSet {
       guard oldValue != agentModel else { return }
       agentModel.save()
+      reviewControllers.removeAll()
       chatControllers.removeAll()
       activityLog.append(
-        level: .info, "New chat turns will use \(agentModel.title) at \(agentEffort.title) effort.")
+        level: .info, "New Claude operations will use \(agentModel.title) at \(agentEffort.title) effort.")
     }
   }
   @Published var agentEffort =
@@ -36,33 +35,10 @@ final class PaperLibraryController: ObservableObject {
     didSet {
       guard oldValue != agentEffort else { return }
       agentEffort.save()
+      reviewControllers.removeAll()
       chatControllers.removeAll()
       activityLog.append(
-        level: .info, "New chat turns will use \(agentModel.title) at \(agentEffort.title) effort.")
-    }
-  }
-  @Published var reviewModel = AgentModelSelection.load(key: AgentModelSelection.reviewDefaultsKey) {
-    didSet {
-      guard oldValue != reviewModel else { return }
-      reviewModel.save(key: AgentModelSelection.reviewDefaultsKey)
-      reviewControllers.removeAll()
-      activityLog.append(
-        level: .info,
-        "New review documents will use \(reviewModel.title) at \(reviewEffort.title) effort.")
-    }
-  }
-  @Published var reviewEffort =
-    AgentModelSelection.load(key: AgentModelSelection.reviewDefaultsKey) == .automatic
-    ? AgentReasoningEffort.automatic
-    : AgentReasoningEffort.load(key: AgentReasoningEffort.reviewDefaultsKey)
-  {
-    didSet {
-      guard oldValue != reviewEffort else { return }
-      reviewEffort.save(key: AgentReasoningEffort.reviewDefaultsKey)
-      reviewControllers.removeAll()
-      activityLog.append(
-        level: .info,
-        "New review documents will use \(reviewModel.title) at \(reviewEffort.title) effort.")
+        level: .info, "New Claude operations will use \(agentModel.title) at \(agentEffort.title) effort.")
     }
   }
   let paths: LibraryPaths
@@ -104,16 +80,6 @@ final class PaperLibraryController: ObservableObject {
     guard effort == .automatic || model.supportedEfforts.contains(effort) else { return }
     agentModel = model
     agentEffort = effort
-  }
-
-  func selectReviewModel(_ model: AgentModelSelection, effort: AgentReasoningEffort) {
-    guard !hasActiveAgentOperations else {
-      notice = "Wait for the current Claude operation to finish before changing models."
-      return
-    }
-    guard effort == .automatic || model.supportedEfforts.contains(effort) else { return }
-    reviewModel = model
-    reviewEffort = effort
   }
 
   private var hasActiveAgentOperations: Bool {
@@ -177,13 +143,13 @@ final class PaperLibraryController: ObservableObject {
     if let existing = reviewControllers[paperID] { return existing }
     #if PPR_PORTABLE_SCHEMA
       let controller = ReviewGenerationController(
-        paperID: paperID, paths: paths, store: store, model: reviewModel.commandLineValue,
-        reasoningEffort: reviewEffort,
+        paperID: paperID, paths: paths, store: store, model: agentModel.commandLineValue,
+        reasoningEffort: agentEffort,
         activityLog: activityLog, executableProvider: agentExecutableProvider)
     #else
       let controller = ReviewGenerationController(
-        paperID: paperID, paths: paths, container: container, model: reviewModel.commandLineValue,
-        reasoningEffort: reviewEffort,
+        paperID: paperID, paths: paths, container: container, model: agentModel.commandLineValue,
+        reasoningEffort: agentEffort,
         activityLog: activityLog, executableProvider: agentExecutableProvider)
     #endif
     reviewControllers[paperID] = controller

@@ -8,7 +8,6 @@ struct AgentModelSelection: Identifiable, Equatable, Sendable {
 
   static let automatic = Self(rawValue: "automatic", title: "Claude default", supportedEfforts: [])
   static let defaultsKey = "selectedClaudeModel"
-  static let reviewDefaultsKey = "selectedClaudeReviewModel"
 
   var id: String { rawValue }
   var commandLineValue: String? { self == .automatic ? nil : rawValue }
@@ -31,19 +30,16 @@ struct AgentModelSelection: Identifiable, Equatable, Sendable {
 
   /// A saved value outside the fixed catalog (for example a stale identifier) falls back to the
   /// Claude Code default instead of being passed to `--model`.
-  static func load(defaults: UserDefaults = .standard, key: String = defaultsKey) -> Self {
-    guard let value = defaults.string(forKey: key) else { return .automatic }
+  static func load(defaults: UserDefaults = .standard) -> Self {
+    guard let value = defaults.string(forKey: defaultsKey) else { return .automatic }
     return choices.first(where: { $0.rawValue == value }) ?? .automatic
   }
 
-  func save(defaults: UserDefaults = .standard, key: String = Self.defaultsKey) {
-    defaults.set(rawValue, forKey: key)
-  }
+  func save(defaults: UserDefaults = .standard) { defaults.set(rawValue, forKey: Self.defaultsKey) }
 }
 
 extension AgentReasoningEffort {
-  static let chatDefaultsKey = "selectedClaudeReasoningEffort"
-  static let reviewDefaultsKey = "selectedClaudeReviewReasoningEffort"
+  private static let defaultsKey = "selectedClaudeReasoningEffort"
 
   var title: String {
     switch self {
@@ -57,12 +53,10 @@ extension AgentReasoningEffort {
     }
   }
 
-  static func load(defaults: UserDefaults = .standard, key: String = chatDefaultsKey) -> Self {
-    guard let value = defaults.string(forKey: key) else { return .automatic }
+  static func load(defaults: UserDefaults = .standard) -> Self {
+    guard let value = defaults.string(forKey: defaultsKey) else { return .automatic }
     return Self(rawValue: value) ?? .automatic
   }
 
-  func save(defaults: UserDefaults = .standard, key: String = Self.chatDefaultsKey) {
-    defaults.set(rawValue, forKey: key)
-  }
+  func save(defaults: UserDefaults = .standard) { defaults.set(rawValue, forKey: Self.defaultsKey) }
 }

@@ -49,7 +49,7 @@
 - Keep the chat composer action-focused: do not repeat paper-context or Claude lifecycle status prose beside the input; route operational status to the global activity log.
 - Keep diagnostics global: Review content stays focused and does not repeat process, structure, evidence, or progress text; the bottom log combines app and Claude lifecycle events. Only actionable load failures remain attached to the review.
 - Keep secondary disclosures out of the workspace header; place storage and security information beside the model selector in the global toolbar.
-- Offer the fixed Claude model families (Opus, Sonnet, Haiku) and their effort levels, plus Claude default and Model default, in two toolbar menus labeled Chat and Review so conversation and document generation keep separate choices. Claude Code resolves each family to its newest model, so the menus need no refresh action.
+- Offer the fixed Claude model families (Opus, Sonnet, Haiku) and their effort levels, plus Claude default and Model default, in one toolbar menu shared by chat and document generation. Claude Code resolves each family to its newest model, so the menu needs no refresh action.
 - During generation, keep one live log line that names the section being written, the evidence count, and elapsed time; refresh it while Claude is silently thinking.
 - Keep the selected model and reasoning effort fully readable in the toolbar; do not replace or truncate the current selection with an icon or ellipsis when space is available.
 - Tradeoffs: prefer native SwiftUI behavior and readable adaptive layouts over pixel-specific web UI imitation.

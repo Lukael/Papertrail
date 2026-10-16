@@ -233,8 +233,7 @@ enum Gate0GTests {
       "Headless Claude Code runs with no tools, MCP servers, or user settings.",
       ".frame(minWidth: 170, alignment: .leading)",
       ".fixedSize(horizontal: true, vertical: false)",
-      "\\(purpose) model \\(selected.title), effort \\(selectedEffort.title)",
-      "purpose: \"Review\", model: controller.reviewModel",
+      "Claude model \\(controller.agentModel.title), effort \\(controller.agentEffort.title)",
     ] {
       try expect(workspace.contains(contract), "toolbar information disclosure lacks \(contract)")
     }
