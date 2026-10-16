@@ -150,23 +150,61 @@ struct PDFSearchTests {
     let event = NSEvent.mouseEvent(
       with: .rightMouseDown, location: NSPoint(x: 300, y: 300), modifierFlags: [],
       timestamp: 0, windowNumber: 0, context: nil, eventNumber: 0, clickCount: 1, pressure: 1)!
-    var received: (PDFSelectionAction, String, Int)?
-    view.onSelectionAction = { received = ($0, $1, $2) }
+    var received: (PDFSelectionAction, PDFSelectedPassage)?
+    view.onSelectionAction = { received = ($0, $1) }
     let selection = document.page(at: 1)!.selection(for: NSRange(location: 6, length: 6))!
     view.currentSelection = selection
     let menu = view.menu(for: event)
     try expect(
-      menu?.items.prefix(3).map(\.title) == PDFSelectionAction.allCases.map(\.title),
+      menu?.items.prefix(PDFSelectionAction.allCases.count).map(\.title)
+        == PDFSelectionAction.allCases.map(\.title),
       "selection actions were not offered")
-    let translate = menu!.items[PDFSelectionAction.translate.rawValue]
-    NSApp.sendAction(translate.action!, to: translate.target, from: translate)
+    let highlight = menu!.items[PDFSelectionAction.highlight.rawValue]
+    NSApp.sendAction(highlight.action!, to: highlight.target, from: highlight)
     try expect(
-      received?.0 == .translate && received?.1 == "second" && received?.2 == 2,
-      "selection action did not report text and 1-based page")
+      received?.0 == .highlight && received?.1.text == "second" && received?.1.pageNumber == 2
+        && received?.1.rects.count == 1 && received!.1.rects[0].width > 0,
+      "selection action did not report text, 1-based page, and line rectangles")
     view.currentSelection = nil
     try expect(
       view.menu(for: event)?.items.contains { $0.title == PDFSelectionAction.ask.title } != true,
       "selection actions were offered without a selection")
+
+    // A saved highlight is drawn, found under the pointer, and offers its own actions.
+    let window = NSWindow(
+      contentRect: NSRect(x: 100, y: 100, width: 600, height: 600),
+      styleMask: [.titled], backing: .buffered, defer: false)
+    window.contentView = view
+    view.autoScales = true
+    view.layoutSubtreeIfNeeded()
+    let page = document.page(at: 1)!
+    view.go(to: page)
+    let coordinator = PDFViewRepresentable.Coordinator(onSearchResultCountChanged: { _ in }, onChange: { _, _ in })
+    let id = UUID()
+    let rect = received!.1.rects[0]
+    coordinator.applyUserHighlights(
+      [PDFUserHighlight(id: id, pageIndex: 1, rects: [rect], note: "memo")], to: view)
+    try expect(
+      page.annotations.filter { $0.userName == AppearancePDFView.highlightPrefix + id.uuidString }.count == 1,
+      "saved highlight was not drawn")
+    let center = view.convert(view.convert(NSPoint(x: rect.midX, y: rect.midY), from: page), to: nil)
+    let onHighlight = NSEvent.mouseEvent(
+      with: .rightMouseDown, location: center, modifierFlags: [], timestamp: 0,
+      windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1)!
+    var highlightAction: (PDFHighlightAction, UUID)?
+    view.onHighlightAction = { highlightAction = ($0, $1) }
+    try expect(view.highlightID(at: onHighlight) == id, "saved highlight was not found under the pointer")
+    let highlightMenu = view.menu(for: onHighlight)
+    try expect(
+      highlightMenu?.items.map(\.title) == ["Edit Note…", "Remove Highlight", ""],
+      "PDFKit markup items appeared over a saved highlight: \(highlightMenu?.items.map(\.title) ?? [])")
+    let remove = highlightMenu?.items.first { $0.title == "Remove Highlight" }
+    NSApp.sendAction(remove!.action!, to: remove!.target, from: remove)
+    try expect(highlightAction?.0 == .remove && highlightAction?.1 == id, "highlight action was not reported")
+    coordinator.applyUserHighlights([], to: view)
+    try expect(
+      !page.annotations.contains { $0.userName?.hasPrefix(AppearancePDFView.highlightPrefix) == true },
+      "removed highlight is still drawn")
   }
 
   private static func makePDF(pages: [String], at url: URL) throws {
