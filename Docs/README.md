@@ -27,15 +27,26 @@ done
 2026-09-10 수동 문서 생성 시나리오에서는 D/E/F/G/H 총 91개 그룹을 통과했습니다.
 A/C는 이 91개 집계에 포함되지 않습니다.
 
-## Codex 모델 목록과 선택값
+## Claude 모델 목록과 선택값
 
 ```sh
-python3 Scripts/verify-codex-models.py
-python3 Scripts/verify-codex-models.py --codex /opt/homebrew/bin/codex
+python3 Scripts/verify-agent-models.py
 ```
 
-첫 명령은 모델 조회·페이지 병합·타임아웃·오류 정보 마스킹과 선택값·캐시 보존을 검사합니다.
-두 번째 명령은 설치된 CLI의 실제 모델 목록도 조회합니다. 모델 추론은 실행하지 않습니다.
+Gate0A 테스트와 함께 고정 모델 계열·effort 목록, 선택값 저장, 이전(Codex) 모델 ID가
+`--model`로 전달되지 않고 기본값으로 돌아가는지 검사합니다. 모델 추론은 실행하지 않습니다.
+
+## 실제 Claude Code 실행 확인
+
+로그인한 CLI로 도구 없는 실행 계약을 확인합니다. 새 세션, `--resume`의 세션 ID 유지, 취소,
+재시도를 실제로 호출하며 모델 사용량이 발생합니다.
+
+```sh
+claude auth status
+DEVELOPER_DIR=/Library/Developer/CommandLineTools swift run Gate0EHarness \
+  --claude "$(command -v claude)" --workspace "$PWD/.build/scenarios/claude-live" \
+  --output "$PWD/.build/scenarios/claude-live/gate0e.json"
+```
 
 ## WebKit 메시지 스크롤 회귀 검사
 
@@ -103,18 +114,18 @@ python3 Scripts/verify-chat-scroll.py --layout-only
 ```
 
 PDF 검사는 생성한 임시 PDF에서 대소문자 무시 검색·페이지 간 결과 이동·검색 해제·문서 전환을 확인합니다. Ctrl+휠·트랙패드 확대·축소, 배율 제한과 읽기 상태 알림, 일반 스크롤·PDF 밖 입력 유지도 검사합니다.
-채팅 검사는 실제 입력창 코드에 Shift+Enter를 보내 커서 위치 줄바꿈과 전송 방지를 확인하고, Enter가 한 번 전송되는지 검사합니다. 실제 Codex에는 요청하지 않습니다.
+채팅 검사는 실제 입력창 코드에 Shift+Enter를 보내 커서 위치 줄바꿈과 전송 방지를 확인하고, Enter가 한 번 전송되는지 검사합니다. 실제 Claude에는 요청하지 않습니다.
 
-## 실제 Codex 생성
+## 실제 Claude 생성
 
-다음 하네스는 별도 라이브러리에 합성 논문과 완료된 대화를 넣고 실제 Codex를 호출합니다.
-Codex CLI 로그인과 네트워크 연결이 필요하며 모델 사용량이 발생합니다.
+다음 하네스는 별도 라이브러리에 합성 논문과 완료된 대화를 넣고 실제 Claude Code를 호출합니다.
+`claude auth login` 로그인과 네트워크 연결이 필요하며 모델 사용량이 발생합니다.
 매 실행마다 새 결과 디렉터리를 사용합니다.
 
 ```sh
 DEVELOPER_DIR=/Library/Developer/CommandLineTools swift run Gate0FHarness \
   "$PWD" "$PWD/.build/scenarios/synthesis-$(date +%Y%m%dT%H%M%S)" \
-  "$(command -v codex)" 300 --with-conversation
+  "$(command -v claude)" 300 --with-conversation
 ```
 
 앱 UI 검증은 다음처럼 사용자 데이터와 분리된 경로로 실행할 수 있습니다.
@@ -137,7 +148,7 @@ open -na "$PWD/Papertrail.app" --args \
 입력·로그·생성 문서가 있으며 Git에서 제외합니다. 증거 요약의 절대 경로는 해당 로컬 실행
 위치를 나타내므로 다른 환경에 파일이 없을 수 있습니다.
 
-기존 `Scripts/verify-gate0*.sh`는 단계별 개발 검증 도구입니다. 일부는 실제 Codex 호출,
+기존 `Scripts/verify-gate0*.sh`는 단계별 개발 검증 도구입니다. 일부는 실제 Claude Code 호출,
 WebKit UI 실행, Command Line Tools 환경에서 SwiftData 빌드가 실패하는 조건 검사를
 포함합니다. 전체 스크립트를 일반 단위 테스트로 취급하지 않습니다. 이 스크립트들이 만드는
 `Docs/Gate*/evidence`는 재생성 가능한 임시 출력이며 Git에서 제외합니다.

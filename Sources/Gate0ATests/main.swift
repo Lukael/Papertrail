@@ -8,9 +8,9 @@ struct TestFailure: Error, CustomStringConvertible {
 
 private final class LiveProgressBox: @unchecked Sendable {
   private let lock = NSLock()
-  private var updates: [CodexLiveProgress] = []
-  func append(_ update: CodexLiveProgress) { lock.withLock { updates.append(update) } }
-  func snapshot() -> [CodexLiveProgress] { lock.withLock { updates } }
+  private var updates: [AgentLiveProgress] = []
+  func append(_ update: AgentLiveProgress) { lock.withLock { updates.append(update) } }
+  func snapshot() -> [AgentLiveProgress] { lock.withLock { updates } }
 }
 
 @main
@@ -19,7 +19,7 @@ enum Gate0ATests {
     let tests: [(String, () throws -> Void)] = [
       ("invocation boundary", testInvocationBoundary),
       ("minimal environment", testMinimalEnvironment),
-      ("dynamic model catalog", testModelCatalog),
+      ("fixed Claude model catalog", testModelCatalog),
       ("JSONL framing", testFraming),
       ("projection and terminal reconciliation", testProjection),
       ("journal permissions, caps, replay", testJournal),
@@ -59,264 +59,182 @@ enum Gate0ATests {
   }
 
   private static func testModelCatalog() throws {
-    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-    defer { try? FileManager.default.removeItem(at: root) }
-    let executable = root.appendingPathComponent("codex")
-    func script(_ body: String) throws {
-      try Data(("#!/bin/sh\n" + body + "\n").utf8).write(to: executable)
-      try FileManager.default.setAttributes(
-        [.posixPermissions: 0o700], ofItemAtPath: executable.path)
-    }
-    let wire =
-      #"{"model":"gpt-future","displayName":"Future model","hidden":false,"isDefault":true,"defaultReasoningEffort":"medium","supportedReasoningEfforts":[{"reasoningEffort":"medium","description":"Medium"},{"reasoningEffort":"future","description":"Future"}]}"#
-    let model = try JSONDecoder().decode(CodexModelDescriptor.self, from: Data(wire.utf8))
-    try expect(model.supportedReasoningEfforts.last?.rawValue == "future", "future effort was lost")
+    let models = AgentModelCatalog.models
+    try expect(models.map(\.model) == ["opus", "sonnet", "haiku"], "model family aliases changed")
     try expect(
-      JSONDecoder().decode(CodexModelDescriptor.self, from: JSONEncoder().encode(model)) == model,
-      "cached catalog did not round-trip")
-    for identifier in [
-      "", "bad/model", "gpt\";touch /tmp/pwned", String(repeating: "a", count: 129),
-    ] {
-      var object = try JSONSerialization.jsonObject(with: Data(wire.utf8)) as! [String: Any]
-      object["model"] = identifier
-      do {
-        _ = try JSONDecoder().decode(
-          CodexModelDescriptor.self, from: JSONSerialization.data(withJSONObject: object))
-        throw TestFailure(description: "invalid catalog model accepted")
-      } catch is DecodingError {}
-    }
-    let second = wire.replacingOccurrences(of: "gpt-future", with: "gpt-second")
-      .replacingOccurrences(of: #""isDefault":true"#, with: #""isDefault":false"#)
-    let hidden = wire.replacingOccurrences(of: "gpt-future", with: "gpt-hidden")
-      .replacingOccurrences(of: #""hidden":false"#, with: #""hidden":true"#)
-    let prelude = """
-      [ "$1" = app-server ] && [ "$2" = --listen ] && [ "$3" = stdio:// ] && [ "$4" = -c ] && [ "$5" = 'model_provider="openai"' ] || exit 1
-      [ "$PWD" != '\(FileManager.default.currentDirectoryPath)' ] || exit 1
-      IFS= read -r initialize
-      printf '%s\\n' '{"method":"notice","params":{}}' '{"id":1,"result":{}}'
-      IFS= read -r initialized
-      IFS= read -r first
-      """ + "\n"
-    try script(
-      prelude + """
-        printf '%s\\n' '{"id":2,"result":{"data":[\(wire),\(hidden)],"nextCursor":"next"}}'
-        IFS= read -r second
-        case "$second" in *'"cursor":"next"'*) ;; *) exit 1 ;; esac
-        printf '%s\\n' '{"method":"notice"}' '{"id":3,"result":{"data":[\(wire),\(second)],"nextCursor":null}}'
-        """)
-    let catalog = try CodexModelCatalog().fetch(executableURL: executable, timeout: 2)
+      models.allSatisfy { AgentInvocation.isValidModelIdentifier($0.model) },
+      "catalog contains an identifier the invocation boundary rejects")
     try expect(
-      catalog.map(\.model) == ["gpt-future", "gpt-second"],
-      "paging, filtering, or deduplication failed")
+      models.allSatisfy { $0.supportedReasoningEfforts == [.low, .medium, .high, .xhigh, .max] },
+      "catalog effort levels drifted from the Claude Code --effort choices")
     try expect(
-      catalog.first?.isDefault == true && catalog.last?.isDefault == false,
-      "default metadata changed")
-    try script(
-      prelude
-        + "printf '%s\\n' '{\"id\":2,\"error\":{\"code\":401,\"message\":\"Login required; bearer secret-token\"}}'\n"
-    )
-    do {
-      _ = try CodexModelCatalog().fetch(executableURL: executable, timeout: 1)
-      throw TestFailure(description: "RPC error accepted")
-    } catch let error as CodexModelCatalogError {
+      AgentModelCatalog.descriptor(for: "sonnet")?.displayName == "Claude Sonnet"
+        && AgentModelCatalog.descriptor(for: "gpt-5.5") == nil,
+      "catalog lookup accepted a non-Claude model")
+    for model in models {
       try expect(
-        error.localizedDescription.contains("401")
-          && error.localizedDescription.contains("Login required"), "actionable RPC error was lost")
-      try expect(
-        !error.localizedDescription.contains("secret-token"), "RPC error leaked credentials")
+        JSONDecoder().decode(AgentModelDescriptor.self, from: JSONEncoder().encode(model))
+          == model, "model descriptor did not round-trip")
+      for effort in model.supportedReasoningEfforts {
+        let invocation = try AgentInvocation(
+          executableURL: URL(fileURLWithPath: "/usr/bin/true"), kind: .new,
+          systemPrompt: testSystemPrompt, prompt: "x",
+          workingDirectory: URL(fileURLWithPath: NSTemporaryDirectory()), model: model.model,
+          reasoningEffort: effort)
+        try expect(
+          invocation.arguments.suffix(4) == ["--model", model.model, "--effort", effort.rawValue],
+          "catalog choice did not reach its approved argument slots")
+      }
     }
-    try script("printf '%s\\n' 'Invalid catalog configuration; bearer startup-token' >&2\nexit 1")
-    do {
-      _ = try CodexModelCatalog().fetch(executableURL: executable, timeout: 1)
-      throw TestFailure(description: "startup error accepted")
-    } catch let error as CodexModelCatalogError {
-      try expect(
-        error.localizedDescription.contains("Invalid catalog configuration"),
-        "startup stderr was lost")
-      try expect(
-        !error.localizedDescription.contains("startup-token"), "startup stderr leaked credentials")
-    }
-    for response in [
-      #"{"id":2,"error":{"code":-1,"message":"failure"}}"#,
-      #"{"id":7,"result":{"data":[],"nextCursor":null}}"#,
-      #"{"id":2,"result":{"data":[],"nextCursor":null}}"#,
-      "not JSON",
-      #"{"id":2,"result":{"data":[{"model":"bad/model"}],"nextCursor":null}}"#,
-    ] {
-      try script(prelude + "printf '%s\\n' '\(response)'\n")
-      do {
-        _ = try CodexModelCatalog().fetch(executableURL: executable, timeout: 1)
-        throw TestFailure(description: "invalid catalog response accepted")
-      } catch is TestFailure {
-        throw TestFailure(description: "invalid catalog response accepted")
-      } catch {}
-    }
-    try script(
-      prelude + """
-        printf '%s\\n' '{"id":2,"result":{"data":[\(wire)],"nextCursor":"same"}}'
-        IFS= read -r second
-        printf '%s\\n' '{"id":3,"result":{"data":[\(wire)],"nextCursor":"same"}}'
-        """)
-    do {
-      _ = try CodexModelCatalog().fetch(executableURL: executable, timeout: 1)
-      throw TestFailure(description: "repeated cursor accepted")
-    } catch CodexModelCatalogError.invalidResponse {}
-    let oversized = root.appendingPathComponent("oversized")
-    try Data(String(repeating: "x", count: 1_048_577).utf8).write(to: oversized)
-    try script(prelude + "/bin/cat '\(oversized.path)'\n")
-    do {
-      _ = try CodexModelCatalog().fetch(executableURL: executable, timeout: 2)
-      throw TestFailure(description: "oversized catalog frame accepted")
-    } catch CodexModelCatalogError.invalidResponse {}
-    let pidFile = root.appendingPathComponent("pid")
-    try script(
-      """
-      echo $$ > '\(pidFile.path)'
-      trap '' TERM
-      while :; do :; done
-      """)
-    let start = Date()
-    do {
-      _ = try CodexModelCatalog().fetch(executableURL: executable, timeout: 0.1)
-      throw TestFailure(description: "hung server accepted")
-    } catch CodexModelCatalogError.timedOut {}
-    try expect(Date().timeIntervalSince(start) < 2, "catalog timeout did not bound cleanup")
-    let pid = try String(contentsOf: pidFile, encoding: .utf8).trimmingCharacters(
-      in: .whitespacesAndNewlines)
-    try expect(Darwin.kill(Int32(pid)!, 0) == -1 && errno == ESRCH, "catalog server was not reaped")
   }
 
   private static func testInvocationBoundary() throws {
     let executable = URL(fileURLWithPath: "/usr/bin/true")
     let workspace = URL(fileURLWithPath: NSTemporaryDirectory())
-    let prompt = #"paper'; $(touch /tmp/pwned); --dangerously-bypass-approvals-and-sandbox"#
-    let new = try CodexInvocation(
-      executableURL: executable, kind: .new, prompt: prompt, workingDirectory: workspace)
-    try expect(
-      new.arguments == [
-        "exec", "--json", "--sandbox", "workspace-write", "--skip-git-repo-check", "-",
-      ],
-      "new argument shape changed")
+    let prompt = #"paper'; $(touch /tmp/pwned); --dangerously-skip-permissions"#
+    let isolation = [
+      "-p", "--output-format", "stream-json", "--verbose", "--tools", "", "--strict-mcp-config",
+      "--setting-sources", "", "--permission-mode", "dontAsk", "--system-prompt", testSystemPrompt,
+    ]
+    let new = try AgentInvocation(
+      executableURL: executable, kind: .new, systemPrompt: testSystemPrompt, prompt: prompt,
+      workingDirectory: workspace)
+    try expect(new.arguments == isolation, "new argument shape changed")
     try expect(new.standardInput == Data(prompt.utf8), "prompt was not preserved on stdin")
     try expect(!new.arguments.joined().contains("touch"), "untrusted prompt reached arguments")
-    for kind in [CodexInvocation.Kind.new, .resume(threadID: "thread-123")] {
-      let automatic = try CodexInvocation(
-        executableURL: executable, kind: kind, prompt: prompt, workingDirectory: workspace,
-        reasoningEffort: .automatic)
-      try expect(
-        !automatic.arguments.contains(where: { $0.hasPrefix("model_reasoning_effort") }),
-        "automatic reasoning unexpectedly overrode CLI configuration")
-      let future = try CodexInvocation(
-        executableURL: executable, kind: kind, prompt: prompt, workingDirectory: workspace,
-        reasoningEffort: CodexReasoningEffort(rawValue: "ultra")!)
-      try expect(
-        future.arguments.contains(#"model_reasoning_effort="ultra""#),
-        "future reasoning effort was not encoded as literal TOML")
-    }
+    let ephemeral = try AgentInvocation(
+      executableURL: executable, kind: .ephemeral, systemPrompt: testSystemPrompt,
+      prompt: prompt, workingDirectory: workspace)
+    try expect(
+      ephemeral.arguments == isolation + ["--no-session-persistence"],
+      "ephemeral turn did not disable session persistence")
+    let resume = try AgentInvocation(
+      executableURL: executable, kind: .resume(sessionID: "session-123"),
+      systemPrompt: testSystemPrompt, prompt: prompt, workingDirectory: workspace,
+      reasoningEffort: .xhigh, streamPartialMessages: true)
+    try expect(
+      resume.arguments
+        == isolation + ["--effort", "xhigh", "--include-partial-messages", "--resume", "session-123"],
+      "resume argument shape changed")
+    let selected = try AgentInvocation(
+      executableURL: executable, kind: .new, systemPrompt: testSystemPrompt, prompt: prompt,
+      workingDirectory: workspace, model: "opus", reasoningEffort: .medium)
+    try expect(
+      selected.arguments == isolation + ["--model", "opus", "--effort", "medium"],
+      "selected model and effort were not isolated to approved argument slots")
+    let automatic = try AgentInvocation(
+      executableURL: executable, kind: .new, systemPrompt: testSystemPrompt, prompt: prompt,
+      workingDirectory: workspace, reasoningEffort: .automatic)
+    try expect(!automatic.arguments.contains("--effort"), "automatic effort overrode the CLI default")
+    let future = try AgentInvocation(
+      executableURL: executable, kind: .new, systemPrompt: testSystemPrompt, prompt: prompt,
+      workingDirectory: workspace, reasoningEffort: AgentReasoningEffort(rawValue: "ultra")!)
+    try expect(future.arguments.suffix(2) == ["--effort", "ultra"], "future effort token was lost")
     for effort in [
       "", "high\"", "high\n", "$(touch /tmp/pwned)", "high;touch",
       String(repeating: "a", count: 33),
     ] {
-      try expect(CodexReasoningEffort(rawValue: effort) == nil, "unsafe reasoning token accepted")
+      try expect(AgentReasoningEffort(rawValue: effort) == nil, "unsafe reasoning token accepted")
       do {
         _ = try JSONDecoder().decode(
-          CodexReasoningEffort.self, from: JSONEncoder().encode(effort))
+          AgentReasoningEffort.self, from: JSONEncoder().encode(effort))
         throw TestFailure(description: "unsafe cached reasoning token accepted")
       } catch is DecodingError {}
     }
-    let selectedModel = try CodexInvocation(
-      executableURL: executable, kind: .new, prompt: prompt, workingDirectory: workspace,
-      model: "gpt-5.5", reasoningEffort: .medium)
-    try expect(
-      selectedModel.arguments == [
-        "exec", "--model", "gpt-5.5", "--config", #"model_reasoning_effort="medium""#,
-        "--json", "--sandbox", "workspace-write", "--skip-git-repo-check", "-",
-      ], "selected model and effort were not isolated to approved argument slots")
-    let isolated = try CodexInvocation(
-      executableURL: executable, kind: .new, prompt: prompt, workingDirectory: workspace,
-      model: "gpt-5.6-terra", reasoningEffort: .medium, ignoreUserConfiguration: true)
-    try expect(
-      isolated.arguments == [
-        "exec", "--model", "gpt-5.6-terra", "--config", #"model_reasoning_effort="medium""#,
-        "--ignore-user-config", "--json", "--sandbox", "workspace-write",
-        "--skip-git-repo-check", "-",
-      ], "isolated invocation shape changed")
-    let resume = try CodexInvocation(
-      executableURL: executable, kind: .resume(threadID: "thread-123"), prompt: prompt,
-      workingDirectory: workspace, reasoningEffort: .xhigh)
-    try expect(
-      resume.arguments == [
-        "exec", "resume", "--config", #"model_reasoning_effort="xhigh""#, "--config",
-        #"sandbox_mode="workspace-write""#, "--config",
-        "sandbox_workspace_write.writable_roots=[\"\(workspace.path)\"]", "--json",
-        "--skip-git-repo-check", "thread-123", "-",
-      ],
-      "resume argument shape changed")
-    do {
-      try CodexInvocation.validate(arguments: ["exec", "--dangerously-bypass-hook-trust", "-"])
-      throw TestFailure(description: "dangerous flag was accepted")
-    } catch is CodexInvocationError {}
-    try expectError(CodexInvocationError.invalidModelIdentifier) {
-      _ = try CodexInvocation(
-        executableURL: executable, kind: .new, prompt: prompt, workingDirectory: workspace,
-        model: "gpt-5.5;rm")
+    for model in ["opus;rm", "-p", "", String(repeating: "a", count: 129)] {
+      try expectError(AgentInvocationError.invalidModelIdentifier) {
+        _ = try AgentInvocation(
+          executableURL: executable, kind: .new, systemPrompt: testSystemPrompt, prompt: prompt,
+          workingDirectory: workspace, model: model)
+      }
     }
-    try expectError(CodexInvocationError.invalidReasoningEffort) {
-      try CodexInvocation.validate(arguments: [
-        "exec", "--config", "model_reasoning_effort=malicious", "--json", "--sandbox",
-        "workspace-write", "--skip-git-repo-check", "-",
-      ])
+    for session in ["--dangerously-skip-permissions", "a b", "", "x;rm"] {
+      try expectError(AgentInvocationError.invalidSessionID) {
+        _ = try AgentInvocation(
+          executableURL: executable, kind: .resume(sessionID: session),
+          systemPrompt: testSystemPrompt, prompt: prompt, workingDirectory: workspace)
+      }
     }
-    do {
-      try CodexInvocation.validate(arguments: [
-        "exec", "--config", "sandbox=danger-full-access", "--json", "--sandbox",
-        "workspace-write", "--skip-git-repo-check", "-",
-      ])
-      throw TestFailure(description: "arbitrary config override was accepted")
-    } catch is CodexInvocationError {}
+    for systemPrompt in [
+      "", "--dangerously-skip-permissions", " leading space", "nul\u{0}byte",
+      String(repeating: "a", count: AgentInvocation.maximumSystemPromptBytes + 1),
+    ] {
+      try expectError(AgentInvocationError.invalidSystemPrompt) {
+        _ = try AgentInvocation(
+          executableURL: executable, kind: .new, systemPrompt: systemPrompt, prompt: prompt,
+          workingDirectory: workspace)
+      }
+    }
+    for arguments in [
+      isolation + ["--dangerously-skip-permissions"],
+      isolation + ["--add-dir", "/"],
+      isolation + ["--resume", "s", "--fork-session"],
+      isolation + ["--no-session-persistence", "--resume", "s"],
+      isolation + ["--include-partial-messages", "--effort", "high"],
+      isolation + ["--include-partial-messages", "--include-partial-messages"],
+      isolation + ["extra prompt argument"],
+      Array(isolation.dropFirst(2)),
+      isolation.map { $0 == "dontAsk" ? "bypassPermissions" : $0 },
+      isolation.map { $0 == "--strict-mcp-config" ? "--mcp-config" : $0 },
+    ] {
+      do {
+        try AgentInvocation.validate(arguments: arguments)
+        throw TestFailure(description: "unapproved argument vector was accepted: \(arguments)")
+      } catch is AgentInvocationError {}
+    }
     try expect(
-      CodexInvocationError.executableNotRunnable.localizedDescription
-        == "The Codex executable is not runnable.",
+      AgentInvocationError.executableNotRunnable.localizedDescription
+        == "The Claude Code executable is not runnable.",
       "resolver failure lost its actionable description")
   }
 
   private static func testMinimalEnvironment() throws {
-    let environment = CodexCapabilityChecker.minimalEnvironment(source: [
-      "HOME": "/Users/test", "SECRET": "leak", "PATH": "/evil",
+    let environment = AgentCapabilityChecker.minimalEnvironment(source: [
+      "HOME": "/Users/test", "SECRET": "leak", "PATH": "/evil", "ANTHROPIC_API_KEY": "sk-leak",
+      "ANTHROPIC_BASE_URL": "http://proxy.invalid", "CLAUDE_CODE_OAUTH_TOKEN": "token",
+      "CLAUDE_CONFIG_DIR": "/tmp/other",
     ])
     try expect(environment["HOME"] == "/Users/test", "HOME was not preserved for CLI-owned auth")
-    try expect(environment["SECRET"] == nil, "arbitrary environment leaked")
+    for key in [
+      "SECRET", "ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL", "CLAUDE_CODE_OAUTH_TOKEN",
+      "CLAUDE_CONFIG_DIR",
+    ] {
+      try expect(environment[key] == nil, "\(key) leaked into the Claude Code child")
+    }
     try expect(!environment["PATH", default: ""].contains("/evil"), "untrusted PATH leaked")
+    try expect(
+      environment["DISABLE_AUTOUPDATER"] == "1"
+        && environment["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"] == "1",
+      "child could update itself or send nonessential traffic")
   }
 
   private static func testFraming() throws {
     let line = Data(
-      #"{"type":"item.completed","item":{"id":"M1","type":"agent_message","text":"한글"}}"#.utf8)
+      #"{"type":"assistant","message":{"id":"M1","content":[{"type":"text","text":"한글"}]}}"#.utf8)
     let stream = line + Data([0x0A])
     for split in 0...stream.count {
-      var framer = CodexJSONLFramer()
+      var framer = AgentJSONLFramer()
       var records = try framer.append(stream.prefix(split))
       records += try framer.append(stream.suffix(stream.count - split))
       try framer.finish()
       try expect(records == [line], "UTF-8 split failed at byte \(split)")
     }
-    var partial = CodexJSONLFramer()
+    var partial = AgentJSONLFramer()
     _ = try partial.append(Data("{}".utf8))
-    try expectError(CodexFramingError.partialRecordAtEOF) { try partial.finish() }
-    var bounded = CodexJSONLFramer(maximumRecordBytes: 4)
-    try expectError(CodexFramingError.recordTooLarge) {
+    try expectError(AgentFramingError.partialRecordAtEOF) { try partial.finish() }
+    var bounded = AgentJSONLFramer(maximumRecordBytes: 4)
+    try expectError(AgentFramingError.recordTooLarge) {
       _ = try bounded.append(Data("12345".utf8))
     }
 
     let valid = Data("ok\n".utf8)
-    var oversizedAfterPrefix = CodexJSONLFramer(maximumRecordBytes: 4)
+    var oversizedAfterPrefix = AgentJSONLFramer(maximumRecordBytes: 4)
     let oversizedBatch = oversizedAfterPrefix.consume(valid + Data("12345\n".utf8))
     try expect(
       oversizedBatch.records == [Data("ok".utf8)], "valid prefix was lost before oversized record")
     try expect(oversizedBatch.error == .recordTooLarge, "oversized suffix was not reported")
 
-    var invalidAfterPrefix = CodexJSONLFramer(maximumRecordBytes: 16)
+    var invalidAfterPrefix = AgentJSONLFramer(maximumRecordBytes: 16)
     let invalidBatch = invalidAfterPrefix.consume(valid + Data([0xFF, 0x0A]))
     try expect(
       invalidBatch.records == [Data("ok".utf8)], "valid prefix was lost before invalid UTF-8")
@@ -331,78 +249,143 @@ enum Gate0ATests {
       in: root, name: "live-progress", contents: """
       #!/bin/sh
       cat >/dev/null
-      printf '%s\n' '{"type":"thread.started","thread_id":"T1"}'
-      printf '%s\n' '{"type":"turn.started","turn_id":"R1"}'
-      printf '%s\n' '{"type":"reasoning.delta","text":"must-not-surface"}'
-      printf '%s\n' '{"type":"reasoning.completed","item":{"id":"X","type":"reasoning","text":"checking evidence"}}'
-      printf '%s\n' '{"type":"item.updated","item":{"id":"M1","type":"agent_message","text":"draft"}}'
-      printf '%s\n' '{"type":"item.completed","item":{"id":"M1","type":"agent_message","text":"\(longText)"}}'
-      printf '%s\n' '{"type":"turn.completed","turn_id":"R1"}'
+      printf '%s\n' '\(initEvent)'
+      printf '%s\n' '{"type":"assistant","message":{"id":"M1","model":"claude-test","content":[{"type":"thinking","thinking":"checking evidence"}]},"session_id":"S1"}'
+      printf '%s\n' '{"type":"stream_event","event":{"type":"content_block_delta","delta":{"text":"must-not-surface"}}}'
+      printf '%s\n' '{"type":"stream_event","event":{"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"partial-draft"}},"session_id":"S1"}'
+      for tokens in 1 6 600 700 1200; do printf '{"type":"system","subtype":"thinking_tokens","estimated_tokens":%s,"session_id":"S1"}\n' "$tokens"; done
+      printf '%s\n' '{"type":"assistant","message":{"id":"E1","model":"<synthetic>","content":[{"type":"text","text":"synthetic-must-not-surface"}]},"session_id":"S1"}'
+      printf '%s\n' '{"type":"assistant","message":{"id":"M1","model":"claude-test","content":[{"type":"text","text":"\(longText)"}]},"session_id":"S1"}'
+      printf '%s\n' '\(successEvent)'
       """)
     let journal = try OperationJournal(directoryURL: root.appendingPathComponent("journal"))
-    let invocation = try CodexInvocation(
-      executableURL: script, kind: .new, prompt: "test", workingDirectory: root)
+    let invocation = try AgentInvocation(
+      executableURL: script, kind: .new, systemPrompt: testSystemPrompt, prompt: "test",
+      workingDirectory: root)
     let box = LiveProgressBox()
-    let result = try DirectProcessCodexTransport().execute(
+    let result = try DirectProcessAgentTransport().execute(
       invocation, journal: journal, cancellation: .init(),
       progress: { box.append($0) })
     let updates = box.snapshot()
     try expect(result.state.outcome == .turnCompleted, "live-progress transport did not complete")
     try expect(updates.contains { $0.kind == .reasoning && $0.text == "checking evidence" },
       "reasoning summary was not surfaced")
-    try expect(updates.contains { $0.kind == .response && $0.text == "draft" },
-      "draft response was not surfaced")
+    try expect(updates.contains { $0.kind == .response && $0.text.count == 4_000 },
+      "response was not surfaced at its bound")
     try expect(!updates.contains { $0.text.contains("must-not-surface") },
-      "raw private reasoning delta surfaced")
+      "raw delta or synthetic error surfaced as Claude output")
     try expect(updates.allSatisfy { $0.text.count <= 4_000 }, "live text exceeded its bound")
+    try expect(
+      updates.first?.kind == .status && updates.last?.text == "Claude finished the response",
+      "session lifecycle status was not surfaced")
+    let thinking = updates.filter { $0.itemID == "thinking-tokens" }.map(\.text)
+    try expect(
+      thinking == [
+        "Thinking… (about 1 tokens)", "Thinking… (about 600 tokens)",
+        "Thinking… (about 1,200 tokens)",
+      ], "thinking-token progress was not throttled to 500-token steps: \(thinking)")
+    try expect(
+      try !String(contentsOf: journal.eventsURL, encoding: .utf8).contains("thinking_tokens")
+        && !String(contentsOf: journal.eventsURL, encoding: .utf8).contains("stream_event"),
+      "per-chunk thinking counters or text deltas were fsync'd into the journal")
+    try expect(
+      updates.contains { $0.kind == .draft && $0.text == "partial-draft" },
+      "streamed text delta was not surfaced as draft progress")
+    try expect(
+      result.state.model == "claude-test", "init model was not recorded for the run summary")
   }
 
   private static func testProjection() throws {
     let lines = [
-      #"{"type":"thread.started","thread_id":"T1"}"#,
-      #"{"type":"item.started","item":{"id":"M1","type":"agent_message","text":""}}"#,
-      #"{"type":"item.updated","item":{"id":"M1","type":"agent_message","text":"hel"}}"#,
-      #"{"type":"item.updated","item":{"id":"M1","type":"agent_message","text":"hello"}}"#,
-      #"{"type":"reasoning.delta","text":"private"}"#,
-      #"{"type":"item.completed","item":{"id":"M1","type":"agent_message","text":"hello"}}"#,
-      #"{"type":"item.completed","item":{"id":"M1","type":"agent_message","text":"hello"}}"#,
-      #"{"type":"turn.completed"}"#,
+      initEvent,
+      #"{"type":"assistant","message":{"id":"M1","model":"claude-test","content":[{"type":"thinking","thinking":""}]},"session_id":"S1"}"#,
+      #"{"type":"assistant","message":{"id":"M1","model":"claude-test","content":[{"type":"text","text":"hello"}]},"session_id":"S1"}"#,
+      #"{"type":"assistant","message":{"id":"M1","model":"claude-test","content":[{"type":"text","text":"hello"}]},"session_id":"S1"}"#,
+      #"{"type":"stream_event","event":{"type":"content_block_delta"}}"#,
+      #"{"type":"assistant","message":{"id":"M1","model":"claude-test","content":[{"type":"text","text":"world"}]},"session_id":"S1"}"#,
+      #"{"type":"result","subtype":"success","is_error":false,"result":"hello\n\nworld","session_id":"S1"}"#,
     ]
-    var projector = CodexEventProjector()
-    for line in lines { try projector.project(CodexEvent(raw: Data(line.utf8))) }
+    var projector = AgentEventProjector()
+    for line in lines { try projector.project(AgentEvent(raw: Data(line.utf8))) }
     projector.reconcile(exitStatus: 0, cancellationRequested: false)
-    try expect(projector.state.externalThreadID == "T1", "thread ID projection failed")
+    try expect(projector.state.externalThreadID == "S1", "session ID projection failed")
     try expect(
-      projector.state.messages == [.init(itemID: "M1", draft: nil, committed: "hello")],
-      "message projection/dedupe failed")
-    try expect(projector.state.outcome == .turnCompleted, "completed+0 did not succeed")
+      projector.state.messages == [.init(itemID: "M1", draft: nil, committed: "hello\n\nworld")],
+      "message projection, block joining, or dedupe failed")
+    try expect(projector.state.resultText == "hello\n\nworld", "final result text was lost")
+    try expect(projector.state.outcome == .turnCompleted, "success+0 did not succeed")
+
+    let authFailure = [
+      initEvent,
+      #"{"type":"assistant","message":{"id":"E1","model":"<synthetic>","content":[{"type":"text","text":"Failed to authenticate: OAuth session expired"}]},"session_id":"S1"}"#,
+      #"{"type":"result","subtype":"success","is_error":true,"result":"Failed to authenticate: OAuth session expired","terminal_reason":"api_error","session_id":"S1"}"#,
+    ]
+    var failed = AgentEventProjector()
+    for line in authFailure { try failed.project(AgentEvent(raw: Data(line.utf8))) }
+    failed.reconcile(exitStatus: 1, cancellationRequested: false)
+    try expect(failed.state.outcome == .failed, "is_error result did not fail the turn")
+    try expect(failed.state.messages.isEmpty, "synthetic error became an assistant message")
+    try expect(failed.state.resultText == nil, "failed result text was treated as an answer")
     try expect(
-      try outcome([#"{"type":"turn.failed"}"#], exit: 0) == .failed, "turn.failed did not fail")
+      AgentCapabilityChecker.classifyOperationFailure(
+        diagnostics: failed.state.diagnostics, stderr: "") == .loggedOut,
+      "authentication failure was not classified as logged out")
     try expect(
-      try outcome([#"{"type":"turn.completed"}"#], exit: 1) == .protocolFailure,
-      "completed+nonzero did not fail protocol")
+      failed.state.failureDetail == "Failed to authenticate: OAuth session expired",
+      "authentication failure detail was not surfaced")
+    // Recorded from a live Claude Code 2.1.231 safeguard refusal.
+    let refusal = [
+      initEvent,
+      #"{"type":"system","subtype":"model_refusal_no_fallback","original_model":"claude-opus-5","api_refusal_category":"reasoning_extraction","session_id":"S1"}"#,
+      #"{"type":"assistant","message":{"id":"E2","model":"<synthetic>","content":[{"type":"text","text":"API Error: Opus 5's safeguards flagged this message."}]},"session_id":"S1"}"#,
+      #"{"type":"result","subtype":"success","is_error":true,"stop_reason":"refusal","terminal_reason":"api_error","result":"API Error: Opus 5's safeguards flagged this message. This sometimes happens with safe, normal conversations.\n\nTry rephrasing the request in a new session or change your model.\n\nLearn more: https://support.claude.com/","session_id":"S1"}"#,
+    ]
+    var refused = AgentEventProjector()
+    for line in refusal { try refused.project(AgentEvent(raw: Data(line.utf8))) }
+    refused.reconcile(exitStatus: 1, cancellationRequested: false)
     try expect(
-      try outcome([], exit: 0) == .protocolFailure, "missing terminal did not fail protocol")
+      refused.state.outcome == .failed && refused.state.messages.isEmpty,
+      "safeguard refusal was not a failed turn without an assistant answer")
     try expect(
-      try outcome([#"{"type":"turn.completed"}"#, #"{"type":"turn.failed"}"#], exit: 0)
+      refused.state.failureDetail
+        == "API Error: Opus 5's safeguards flagged this message. This sometimes happens with safe, normal conversations. Try rephrasing the request in a new session or change your model.",
+      "refusal detail lost its remedy: \(String(describing: refused.state.failureDetail))")
+    try expect(projector.state.failureDetail == nil, "completed turn reported a failure detail")
+
+    try expect(
+      try outcome([successEvent], exit: 1) == .protocolFailure,
+      "success+nonzero did not fail protocol")
+    try expect(try outcome([], exit: 0) == .protocolFailure, "missing result did not fail protocol")
+    try expect(try outcome([], exit: 1) == .failed, "CLI rejection before streaming did not fail")
+    try expect(
+      try outcome([successEvent, successEvent.replacingOccurrences(of: "done", with: "again")], exit: 0)
         == .protocolFailure,
-      "conflicting terminals did not fail protocol")
-    var wrongTurn = CodexEventProjector()
-    try wrongTurn.project(
-      CodexEvent(raw: Data(#"{"type":"turn.started","turn_id":"expected"}"#.utf8)))
-    try expectError(CodexProjectionError.conflictingTurnIDs) {
-      try wrongTurn.project(
-        CodexEvent(raw: Data(#"{"type":"turn.completed","turn_id":"other"}"#.utf8)))
+      "two terminal results did not fail protocol")
+    try expectError(AgentProjectionError.toolsEnabled(["Bash"])) {
+      var projector = AgentEventProjector()
+      try projector.project(
+        AgentEvent(raw: Data(initEvent.replacingOccurrences(of: #""tools":[]"#, with: #""tools":["Bash"]"#).utf8)))
     }
-    var interrupted = CodexEventProjector()
+    try expectError(AgentProjectionError.unexpectedToolUse) {
+      var projector = AgentEventProjector()
+      try projector.project(
+        AgentEvent(raw: Data(#"{"type":"assistant","message":{"id":"M1","content":[{"type":"tool_use","name":"Read"}]}}"#.utf8)))
+    }
+    try expectError(AgentProjectionError.conflictingSessionIDs) {
+      var projector = AgentEventProjector()
+      try projector.project(AgentEvent(raw: Data(initEvent.utf8)))
+      try projector.project(
+        AgentEvent(raw: Data(successEvent.replacingOccurrences(of: "S1", with: "S2").utf8)))
+    }
+    var interrupted = AgentEventProjector()
     interrupted.reconcile(
       exitStatus: 9, terminationReason: .uncaughtSignal, cancellationRequested: false)
     try expect(interrupted.state.outcome == .interrupted, "unrequested signal was not interrupted")
   }
 
-  private static func outcome(_ lines: [String], exit: Int32) throws -> CodexOperationOutcome {
-    var projector = CodexEventProjector()
-    for line in lines { try projector.project(CodexEvent(raw: Data(line.utf8))) }
+  private static func outcome(_ lines: [String], exit: Int32) throws -> AgentOperationOutcome {
+    var projector = AgentEventProjector()
+    for line in lines { try projector.project(AgentEvent(raw: Data(line.utf8))) }
     projector.reconcile(exitStatus: exit, cancellationRequested: false)
     return projector.state.outcome
   }
@@ -413,12 +396,13 @@ enum Gate0ATests {
     let journal = try OperationJournal(
       directoryURL: root.appendingPathComponent("operation"), recordLimit: 256, journalLimit: 1024)
     for record in [
-      #"{"type":"thread.started","thread_id":"T1"}"#,
-      #"{"type":"item.completed","item":{"id":"M1","type":"agent_message","text":"hello"}}"#,
-      #"{"type":"turn.completed"}"#,
+      initEvent,
+      #"{"type":"assistant","message":{"id":"M1","content":[{"type":"text","text":"hello"}]}}"#,
+      successEvent,
     ] { try journal.append(Data(record.utf8)) }
     var before = try journal.replay()
     before.reconcile(exitStatus: 0, cancellationRequested: false)
+    try expect(before.state.outcome == .turnCompleted, "journal replay did not reconcile")
     let beforeBytes = try before.state.stableBytes()
     let export = root.appendingPathComponent("export/stderr.log")
     try DiagnosticExporter().writeRedactedStderr(
@@ -473,27 +457,27 @@ enum Gate0ATests {
     try expect(try Data(contentsOf: outside) == Data("outside".utf8), "symlink init wrote outside")
 
     let swap = try OperationJournal(directoryURL: root.appendingPathComponent("swap-operation"))
-    try swap.append(Data(#"{"type":"thread.started","thread_id":"T1"}"#.utf8))
+    try swap.append(Data(#"{"type":"system","subtype":"init","session_id":"T1","tools":[]}"#.utf8))
     let accepted = try Data(contentsOf: swap.eventsURL)
     try FileManager.default.removeItem(at: swap.eventsURL)
     try FileManager.default.createSymbolicLink(at: swap.eventsURL, withDestinationURL: outside)
     try expectError(OperationJournalError.journalTampered) {
-      try swap.append(Data(#"{"type":"turn.completed"}"#.utf8))
+      try swap.append(Data(#"{"type":"result","subtype":"success","is_error":false,"result":"done"}"#.utf8))
     }
     try expect(try Data(contentsOf: outside) == Data("outside".utf8), "symlink swap wrote outside")
 
     let truncate = try OperationJournal(
       directoryURL: root.appendingPathComponent("truncate-operation"))
-    try truncate.append(Data(#"{"type":"thread.started","thread_id":"T2"}"#.utf8))
+    try truncate.append(Data(#"{"type":"system","subtype":"init","session_id":"T2","tools":[]}"#.utf8))
     try Data().write(to: truncate.eventsURL)
     try expectError(OperationJournalError.journalTampered) { _ = try truncate.replay() }
 
     let deleted = try OperationJournal(
       directoryURL: root.appendingPathComponent("delete-operation"))
-    try deleted.append(Data(#"{"type":"thread.started","thread_id":"T3"}"#.utf8))
+    try deleted.append(Data(#"{"type":"system","subtype":"init","session_id":"T3","tools":[]}"#.utf8))
     try FileManager.default.removeItem(at: deleted.eventsURL)
     try expectError(OperationJournalError.journalTampered) {
-      try deleted.append(Data(#"{"type":"turn.completed"}"#.utf8))
+      try deleted.append(Data(#"{"type":"result","subtype":"success","is_error":false,"result":"done"}"#.utf8))
     }
     try expect(!accepted.isEmpty, "accepted replay prefix fixture was empty")
   }
@@ -502,20 +486,21 @@ enum Gate0ATests {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: root) }
     let operationID = UUID()
-    let result = CodexOperationResultV1(
+    let result = AgentOperationResultV1(
       operationID: operationID, journalByteCount: 73,
-      state: CodexProjectedState(
-        externalThreadID: "thread-1",
+      state: AgentProjectedState(
+        externalThreadID: "session-1",
         messages: [.init(itemID: "message-1", draft: nil, committed: "answer")],
-        terminalEvents: ["turn.completed:turn-1"], outcome: .turnCompleted),
+        terminalEvents: ["result.success"], outcome: .turnCompleted),
       exitStatus: 0, terminationReason: .exit)
-    let store = CodexOperationResultStore(directoryURL: root)
+    let store = AgentOperationResultStore(directoryURL: root)
 
     try store.write(result)
     let recovered = try store.read(
       expectedOperationID: operationID, expectedJournalByteCount: 73)
 
     try expect(recovered == result, "operation result changed during sidecar round-trip")
+    try expect(recovered?.terminalEvent == "result.success", "terminal event was not retained")
     let sidecar = root.appendingPathComponent("operation-result.json")
     let mode =
       (try FileManager.default.attributesOfItem(atPath: sidecar.path)[.posixPermissions]
@@ -527,16 +512,16 @@ enum Gate0ATests {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: root) }
     let operationID = UUID()
-    let accepted = CodexOperationResultV1(
+    let accepted = AgentOperationResultV1(
       operationID: operationID, journalByteCount: 10,
-      state: CodexProjectedState(outcome: .failed), exitStatus: 1,
+      state: AgentProjectedState(outcome: .failed), exitStatus: 1,
       terminationReason: .exit)
-    let store = CodexOperationResultStore(directoryURL: root, maximumBytes: 768)
+    let store = AgentOperationResultStore(directoryURL: root, maximumBytes: 768)
     try store.write(accepted)
 
-    let largeProjection = CodexOperationResultV1(
+    let largeProjection = AgentOperationResultV1(
       operationID: operationID, journalByteCount: 10,
-      state: CodexProjectedState(
+      state: AgentProjectedState(
         diagnostics: [String(repeating: "x", count: 2_048)], outcome: .protocolFailure),
       exitStatus: 1, terminationReason: .exit)
     try store.write(largeProjection)
@@ -546,7 +531,7 @@ enum Gate0ATests {
         == largeProjection,
       "large projected payload was copied into the bounded terminal sidecar")
 
-    let rejectingStore = CodexOperationResultStore(directoryURL: root, maximumBytes: 1)
+    let rejectingStore = AgentOperationResultStore(directoryURL: root, maximumBytes: 1)
     do {
       try rejectingStore.write(accepted)
       throw TestFailure(description: "oversized operation result sidecar was accepted")
@@ -561,11 +546,11 @@ enum Gate0ATests {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: root) }
     let operationID = UUID()
-    let store = CodexOperationResultStore(directoryURL: root)
+    let store = AgentOperationResultStore(directoryURL: root)
     try store.write(
-      CodexOperationResultV1(
+      AgentOperationResultV1(
         operationID: operationID, journalByteCount: 41,
-        state: CodexProjectedState(outcome: .interrupted), exitStatus: 9,
+        state: AgentProjectedState(outcome: .interrupted), exitStatus: 9,
         terminationReason: .uncaughtSignal))
 
     do {
@@ -578,11 +563,11 @@ enum Gate0ATests {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: root) }
     let operationID = UUID()
-    let store = CodexOperationResultStore(directoryURL: root)
+    let store = AgentOperationResultStore(directoryURL: root)
     try store.write(
-      CodexOperationResultV1(
+      AgentOperationResultV1(
         operationID: operationID, journalByteCount: 41,
-        state: CodexProjectedState(outcome: .interrupted), exitStatus: 9,
+        state: AgentProjectedState(outcome: .interrupted), exitStatus: 9,
         terminationReason: .uncaughtSignal))
 
     do {
@@ -592,68 +577,57 @@ enum Gate0ATests {
   }
 
   private static func testCapabilityStates() throws {
-    let missing = CodexCapabilityChecker().check(
-      executableURL: URL(fileURLWithPath: "/definitely/missing/codex"))
+    let missing = AgentCapabilityChecker().check(
+      executableURL: URL(fileURLWithPath: "/definitely/missing/claude"))
     try expect(missing.status == .missing, "missing executable was not classified")
     try expect(
-      CodexCapabilityChecker.classifyOperationFailure(stderr: "Login required") == .loggedOut,
+      AgentCapabilityChecker.classifyOperationFailure(
+        diagnostics: [], stderr: "Not logged in · Please run /login") == .loggedOut,
       "logged-out failure was not classified")
     try expect(
-      CodexCapabilityChecker.classifyOperationFailure(stderr: "network failed")
+      AgentCapabilityChecker.classifyOperationFailure(diagnostics: ["network failed"], stderr: "")
         == .invocationFailed,
       "generic failure was misclassified")
 
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: root) }
-    let compatible = try makeExecutable(
-      in: root, name: "compatible", contents: capabilityScript(version: "0.149.1"))
-    let incompatible = try makeExecutable(
-      in: root, name: "incompatible", contents: capabilityScript(version: "0.148.0"))
-    let resumeSandbox = try makeExecutable(
-      in: root, name: "resume-sandbox",
-      contents: capabilityScript(version: "0.149.1", resumeExposesSandbox: true))
-    let incompleteResumeHelp = try makeExecutable(
-      in: root, name: "incomplete-resume-help",
-      contents: incompleteResumeHelpScript())
-    let completeButIncompatible = try makeExecutable(
-      in: root, name: "complete-incompatible-help",
-      contents: completeIncompatibleHelpScript())
-    let transientResumeHelp = try makeExecutable(
-      in: root, name: "transient-resume-help",
-      contents: transientResumeHelpScript())
-    let highVolumeHelp = try makeExecutable(
-      in: root, name: "high-volume-help",
-      contents: highVolumeHelpScript())
-    try expect(
-      CodexCapabilityChecker().check(executableURL: compatible).status == .usable,
+    func check(_ name: String, _ contents: String) throws -> AgentCapabilityReport {
+      AgentCapabilityChecker().check(
+        executableURL: try makeExecutable(in: root, name: name, contents: contents))
+    }
+    try expect(try check("compatible", claudeScript()).status == .usable,
       "compatible capability surface was rejected")
     try expect(
-      CodexCapabilityChecker().check(executableURL: incompatible).status == .incompatible,
-      "old capability surface was accepted")
+      try check("old", claudeScript(version: "2.0.9 (Claude Code)")).status == .incompatible,
+      "version below the capability floor was accepted")
     try expect(
-      CodexCapabilityChecker().check(executableURL: resumeSandbox).status == .incompatible,
-      "resume sandbox option drift was accepted")
-    let incomplete = CodexCapabilityChecker().check(executableURL: incompleteResumeHelp)
-    try expect(
-      incomplete.status == .invocationFailed,
+      try check("other-cli", claudeScript(version: "codex-cli 0.159.2")).status == .incompatible,
+      "a different CLI was accepted as Claude Code")
+    let missingOption = try check(
+      "missing-option",
+      claudeScript(help: completeHelp.replacingOccurrences(of: "--effort <level>", with: "")))
+    try expect(missingOption.status == .incompatible,
+      "complete help without a required option was not classified as incompatible")
+    try expect(missingOption.detail.contains("missing=--effort"),
+      "incompatible help discarded its missing capability evidence")
+    let incomplete = try check("incomplete-help", claudeScript(help: "--print"))
+    try expect(incomplete.status == .invocationFailed,
       "incomplete help output was falsely classified as an incompatible CLI")
+    let loggedOut = try check("logged-out", claudeScript(loggedIn: "false"))
+    try expect(loggedOut.status == .loggedOut, "logged-out CLI was reported usable")
+    try expect(loggedOut.detail.contains("claude auth login"), "logged-out state lost its remedy")
     try expect(
-      incomplete.detail.contains("exec resume --help")
-        && incomplete.detail.contains("missing=--skip-git-repo-check"),
-      "incomplete help failure discarded its missing capability evidence")
+      try check("unknown-auth", claudeScript(authOutput: "not json")).status == .usable,
+      "an unreadable auth probe blocked a usable CLI instead of deferring to the operation")
     try expect(
-      CodexCapabilityChecker().check(executableURL: completeButIncompatible).status
-        == .incompatible,
-      "complete help with a missing required option was not classified as incompatible")
-    try expect(
-      CodexCapabilityChecker().check(executableURL: transientResumeHelp).status == .usable,
+      try check("transient-help", transientHelpScript()).status == .usable,
       "a complete retry did not recover a transient incomplete help response")
     let highVolumeStarted = Date()
     try expect(
-      CodexCapabilityChecker().check(executableURL: highVolumeHelp).status == .usable,
+      try check("high-volume-help", paddedHelpScript()).status == .usable,
       "high-volume help output was not drained safely")
     try expect(
-      Date().timeIntervalSince(highVolumeStarted) < 5,
+      Date().timeIntervalSince(highVolumeStarted) < 10,
       "high-volume help output blocked on a full process pipe")
   }
 
@@ -661,25 +635,36 @@ enum Gate0ATests {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: root) }
     let incompatible = try makeExecutable(
-      in: root, name: "incompatible-codex", contents: capabilityScript(version: "0.148.0"))
+      in: root, name: "incompatible-claude",
+      contents: claudeScript(version: "2.0.9 (Claude Code)"))
     let compatibleDirectory = root.appendingPathComponent("compatible-bin", isDirectory: true)
     let compatible = try makeExecutable(
-      in: compatibleDirectory, name: "codex", contents: capabilityScript(version: "0.149.1"))
+      in: compatibleDirectory, name: "claude", contents: claudeScript())
 
-    let selected = try CodexExecutableResolver().resolve(
+    let selected = try AgentExecutableResolver().resolve(
       preferredPath: incompatible.path, environment: ["PATH": compatibleDirectory.path])
 
     try expect(
       selected.standardizedFileURL != incompatible.standardizedFileURL,
       "resolver returned the first executable without proving CLI compatibility")
     try expect(
-      CodexCapabilityChecker().check(executableURL: selected).status == .usable,
+      AgentCapabilityChecker().check(executableURL: selected).status == .usable,
       "resolver did not select a capability-checked executable after rejecting the first candidate")
     if selected.path.hasPrefix(root.path) {
       try expect(
         selected.standardizedFileURL == compatible.standardizedFileURL,
         "resolver skipped the next usable PATH candidate")
     }
+
+    let loggedOutDirectory = root.appendingPathComponent("logged-out-bin", isDirectory: true)
+    let loggedOut = try makeExecutable(
+      in: loggedOutDirectory, name: "claude", contents: claudeScript(loggedIn: "false"))
+    let error = AgentExecutableResolutionError(inspectedCandidates: [
+      AgentCapabilityChecker().check(executableURL: loggedOut)
+    ])
+    try expect(
+      error.localizedDescription.contains("claude auth login"),
+      "logged-out resolution failure did not name the login remedy")
   }
 
   private static func testTransportAcceptedPrefix() throws {
@@ -688,9 +673,7 @@ enum Gate0ATests {
 
     let malformed = try makeExecutable(
       in: root, name: "malformed",
-      contents:
-        "#!/bin/sh\nprintf '%s\\n' '{\"type\":\"thread.started\",\"thread_id\":\"T1\"}' '{\"type\":'\n"
-    )
+      contents: "#!/bin/sh\nprintf '%s\\n' '\(initEvent)' '{\"type\":'\n")
     let malformedJournal = try OperationJournal(
       directoryURL: root.appendingPathComponent("malformed-journal"))
     let malformedResult = try runFake(malformed, journal: malformedJournal)
@@ -719,7 +702,7 @@ enum Gate0ATests {
         as? NSNumber)?.intValue
       try expect(mode == 0o600, "protocol diagnostic artifact is not 0600")
       let persisted = try JSONDecoder().decode(
-        CodexProtocolDiagnostic.self, from: Data(contentsOf: diagnosticURL))
+        AgentProtocolDiagnostic.self, from: Data(contentsOf: diagnosticURL))
       try expect(
         persisted == malformedResult.protocolDiagnostic,
         "persisted protocol diagnostic differs from transport result")
@@ -727,9 +710,7 @@ enum Gate0ATests {
 
     let invalidUTF8 = try makeExecutable(
       in: root, name: "invalid-utf8",
-      contents:
-        "#!/bin/sh\nprintf '%s\\n' '{\"type\":\"thread.started\",\"thread_id\":\"T1\"}'\nprintf '\\377\\n'\n"
-    )
+      contents: "#!/bin/sh\nprintf '%s\\n' '\(initEvent)'\nprintf '\\377\\n'\n")
     let invalidJournal = try OperationJournal(
       directoryURL: root.appendingPathComponent("invalid-journal"))
     let invalidResult = try runFake(invalidUTF8, journal: invalidJournal)
@@ -742,7 +723,7 @@ enum Gate0ATests {
     let oversized = try makeExecutable(
       in: root, name: "oversized",
       contents:
-        "#!/bin/sh\nprintf '%s\\n' '{\"type\":\"thread.started\",\"thread_id\":\"T1\"}'\n/usr/bin/head -c 1048577 /dev/zero | /usr/bin/tr '\\000' a\nprintf '\\n'\n"
+        "#!/bin/sh\nprintf '%s\\n' '\(initEvent)'\n/usr/bin/head -c 1048577 /dev/zero | /usr/bin/tr '\\000' a\nprintf '\\n'\n"
     )
     let oversizedJournal = try OperationJournal(
       directoryURL: root.appendingPathComponent("oversized-journal"))
@@ -757,7 +738,7 @@ enum Gate0ATests {
     let missingField = try makeExecutable(
       in: root, name: "missing-field",
       contents:
-        "#!/bin/sh\nprintf '%s\\n' '{\"type\":\"thread.started\",\"thread_id\":\"T1\"}' '{\"type\":\"item.completed\",\"item\":{\"id\":\"M1\",\"type\":\"agent_message\"}}'\n"
+        "#!/bin/sh\nprintf '%s\\n' '\(initEvent)' '{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"x\"}]}}'\n"
     )
     let missingJournal = try OperationJournal(
       directoryURL: root.appendingPathComponent("missing-journal"))
@@ -773,9 +754,7 @@ enum Gate0ATests {
 
     let partial = try makeExecutable(
       in: root, name: "partial",
-      contents:
-        "#!/bin/sh\nprintf '%s\\n' '{\"type\":\"thread.started\",\"thread_id\":\"T1\"}'\nprintf '%s' '{\"type\":\"turn.completed\"}'\n"
-    )
+      contents: "#!/bin/sh\nprintf '%s\\n' '\(initEvent)'\nprintf '%s' '{\"type\":\"result\"}'\n")
     let partialJournal = try OperationJournal(
       directoryURL: root.appendingPathComponent("partial-journal"))
     let partialResult = try runFake(partial, journal: partialJournal)
@@ -784,26 +763,26 @@ enum Gate0ATests {
       "partial EOF reason missing")
     try expect(try journalRecords(partialJournal).count == 1, "partial EOF lost accepted prefix")
 
-    let wrongTurn = try makeExecutable(
-      in: root, name: "wrong-turn",
+    let toolUse = try makeExecutable(
+      in: root, name: "tool-use",
       contents:
-        "#!/bin/sh\nprintf '%s\\n' '{\"type\":\"turn.started\",\"turn_id\":\"expected\"}' '{\"type\":\"turn.completed\",\"turn_id\":\"other\"}'\n"
+        "#!/bin/sh\nprintf '%s\\n' '\(initEvent)' '{\"type\":\"assistant\",\"message\":{\"id\":\"M1\",\"content\":[{\"type\":\"tool_use\",\"name\":\"Bash\"}]}}'\n"
     )
-    let wrongTurnJournal = try OperationJournal(
-      directoryURL: root.appendingPathComponent("wrong-turn-journal"))
-    let wrongTurnResult = try runFake(wrongTurn, journal: wrongTurnJournal)
-    try expect(wrongTurnResult.state.outcome == .protocolFailure, "wrong turn passed transport")
+    let toolUseJournal = try OperationJournal(
+      directoryURL: root.appendingPathComponent("tool-use-journal"))
+    let toolUseResult = try runFake(toolUse, journal: toolUseJournal)
+    try expect(toolUseResult.state.outcome == .protocolFailure, "tool use passed transport")
     try expect(
-      wrongTurnResult.protocolDiagnostic?.kind == .projectionFailure,
-      "wrong-turn transport diagnostic missing")
+      toolUseResult.protocolDiagnostic?.kind == .projectionFailure,
+      "tool-use transport diagnostic missing")
     try expect(
-      try journalRecords(wrongTurnJournal).count == 2,
-      "wrong-turn event was not journaled before projection rejection")
+      try journalRecords(toolUseJournal).count == 2,
+      "tool-use event was not journaled before projection rejection")
 
     let conflictingTerminals = try makeExecutable(
       in: root, name: "conflicting-terminals",
       contents:
-        "#!/bin/sh\nprintf '%s\\n' '{\"type\":\"turn.completed\"}' '{\"type\":\"turn.failed\"}'\n"
+        "#!/bin/sh\nprintf '%s\\n' '\(successEvent)' '\(successEvent.replacingOccurrences(of: "done", with: "again"))'\n"
     )
     let conflictingResult = try runFake(
       conflictingTerminals,
@@ -822,7 +801,7 @@ enum Gate0ATests {
     let noisy = try makeExecutable(
       in: root, name: "noisy",
       contents:
-        "#!/bin/sh\n/usr/bin/head -c 1200000 /dev/zero >&2\nprintf '%s\\n' '{\"type\":\"turn.completed\"}'\n"
+        "#!/bin/sh\n/usr/bin/head -c 1200000 /dev/zero >&2\nprintf '%s\\n' '\(successEvent)'\n"
     )
     let noisyResult = try runFake(
       noisy, journal: OperationJournal(directoryURL: root.appendingPathComponent("noisy-journal")))
@@ -833,9 +812,9 @@ enum Gate0ATests {
     let waits = try makeExecutable(
       in: root, name: "waits",
       contents:
-        "#!/bin/sh\ntrap 'exit 143' TERM\nprintf '%s\\n' '{\"type\":\"thread.started\",\"thread_id\":\"T1\"}'\nwhile :; do :; done\n"
+        "#!/bin/sh\ntrap 'exit 143' TERM\nprintf '%s\\n' '\(initEvent)'\nwhile :; do :; done\n"
     )
-    let immediate = CodexCancellationToken()
+    let immediate = AgentCancellationToken()
     immediate.cancel()
     let immediateResult = try runFake(
       waits, journal: OperationJournal(directoryURL: root.appendingPathComponent("immediate")),
@@ -845,7 +824,7 @@ enum Gate0ATests {
       immediateResult.retryDisposition == .explicitUserDecisionRequired,
       "cancel retry policy was not explicit")
 
-    let late = CodexCancellationToken()
+    let late = AgentCancellationToken()
     DispatchQueue.global().asyncAfter(deadline: .now() + .milliseconds(100)) { late.cancel() }
     let lateResult = try runFake(
       waits, journal: OperationJournal(directoryURL: root.appendingPathComponent("late")),
@@ -885,7 +864,7 @@ enum Gate0ATests {
       in: root, name: "inherited-pipes",
       contents: """
         #!/bin/sh
-        printf '%s\\n' '{"type":"thread.started","thread_id":"TREE"}'
+        printf '%s\\n' '\(initEvent.replacingOccurrences(of: "S1", with: "TREE"))'
         /bin/sh -c 'trap "" TERM; while :; do :; done' &
         printf "%s" "$!" > "\(descendantPIDFile.path)"
         trap 'exit 143' TERM
@@ -952,90 +931,87 @@ enum Gate0ATests {
     try expect(Darwin.kill(pid, 0) == -1 && errno == ESRCH, "stdin failure left child unreaped")
   }
 
-  private static func capabilityScript(
-    version: String, resumeExposesSandbox: Bool = false
+  private static let testSystemPrompt = "TEST_SYSTEM_PROMPT"
+  private static let initEvent =
+    #"{"type":"system","subtype":"init","session_id":"S1","tools":[],"mcp_servers":[],"model":"claude-test","permissionMode":"dontAsk"}"#
+  private static let successEvent =
+    #"{"type":"result","subtype":"success","is_error":false,"result":"done","session_id":"S1"}"#
+  private static let completeHelp = """
+    Usage: claude [options] [command] [prompt]
+    Options:
+      -p, --print                  Print response and exit
+      --output-format <format>     "text", "json", or "stream-json"
+      --verbose                    Override verbose mode
+      --tools <tools...>           Available built-in tools
+      --strict-mcp-config          Only use MCP servers from --mcp-config
+      --setting-sources <sources>  Setting sources to load
+      --permission-mode <mode>     (choices: "acceptEdits", "dontAsk", "plan")
+      --system-prompt <prompt>     System prompt
+      --model <model>              Model for the session
+      --effort <level>             Effort level
+      --include-partial-messages   Include partial message chunks
+      -r, --resume [value]         Resume a conversation
+      --no-session-persistence     Disable session persistence
+      -h, --help                   Display help for command
+    """
+
+  private static func claudeScript(
+    version: String = "2.1.231 (Claude Code)", help: String = completeHelp,
+    loggedIn: String = "true", authOutput: String? = nil
   ) -> String {
-    let resumeSandbox = resumeExposesSandbox ? "--sandbox workspace-write" : ""
+    let auth = authOutput ?? #"{"loggedIn": \#(loggedIn), "authMethod": "claude.ai"}"#
     return """
       #!/bin/sh
-      if [ "$1" = "--version" ]; then
-        printf '%s\n' 'codex-cli \(version)'
-      elif [ "$1" = "exec" ] && [ "$2" = "resume" ]; then
-        printf '%s\n' '--json --skip-git-repo-check \(resumeSandbox) If `-` is used, read from stdin'
-        printf '%s\n' '--dangerously-bypass-approvals-and-sandbox --dangerously-bypass-hook-trust'
-        printf '%s\n' 'Examples: sandbox_permissions=["disk-full-read-access"]'
-      else
-        printf '%s\n' '--json --sandbox workspace-write --skip-git-repo-check resume instructions are read from stdin'
-      fi
+      case "$1" in
+        --version) printf '%s\\n' '\(version)' ;;
+        --help) cat <<'HELP'
+      \(help)
+      HELP
+        ;;
+        auth) printf '%s\\n' '\(auth)' ;;
+        *) exit 2 ;;
+      esac
       """
   }
 
-  private static func incompleteResumeHelpScript() -> String {
+  private static func transientHelpScript() -> String {
     """
     #!/bin/sh
-    if [ "$1" = "--version" ]; then
-      printf '%s\n' 'codex-cli 0.149.1'
-    elif [ "$1" = "exec" ] && [ "$2" = "resume" ]; then
-      printf '%s\n' '--json'
-    else
-      printf '%s\n' '--json --sandbox workspace-write --skip-git-repo-check resume instructions are read from stdin'
-    fi
+    case "$1" in
+      --version) printf '%s\\n' '2.1.231 (Claude Code)' ;;
+      --help)
+        state="$0.help-attempt"
+        count=0
+        test ! -f "$state" || count=$(cat "$state")
+        count=$((count + 1))
+        printf '%s\\n' "$count" > "$state"
+        if [ "$count" -eq 1 ]; then printf '%s\\n' '--print'; else cat <<'HELP'
+    \(completeHelp)
+    HELP
+        fi ;;
+      auth) printf '%s\\n' '{"loggedIn": true}' ;;
+    esac
     """
   }
 
-  private static func completeIncompatibleHelpScript() -> String {
+  private static func paddedHelpScript() -> String {
     """
     #!/bin/sh
-    if [ "$1" = "--version" ]; then
-      printf '%s\n' 'codex-cli 0.149.1'
-    elif [ "$1" = "exec" ] && [ "$2" = "resume" ]; then
-      printf '%s\n' 'Usage: codex exec resume [OPTIONS]'
-      printf '%s\n' 'Options:'
-      printf '%s\n' '  --json'
-      printf '%s\n' '  -h, --help'
-      printf '%s\n' 'If `-` is used, read from stdin'
-    else
-      printf '%s\n' '--json --sandbox workspace-write --skip-git-repo-check resume instructions are read from stdin'
-    fi
+    case "$1" in
+      --version) printf '%s\\n' '2.1.231 (Claude Code)' ;;
+      --help) cat <<'HELP'
+    \(completeHelp)
+    HELP
+        yes 'bounded capability padding 012345678901234567890123456789' | head -n 24000 ;;
+      auth) yes 'bounded auth padding 012345678901234567890123456789' | head -n 12000
+        printf '%s\\n' '{"loggedIn": true}' ;;
+    esac
     """
   }
 
-  private static func transientResumeHelpScript() -> String {
-    """
-    #!/bin/sh
-    if [ "$1" = "--version" ]; then
-      printf '%s\n' 'codex-cli 0.149.1'
-    elif [ "$1" = "exec" ] && [ "$2" = "resume" ]; then
-      state="$0.resume-attempt"
-      count=0
-      test ! -f "$state" || count=$(cat "$state")
-      count=$((count + 1))
-      printf '%s\n' "$count" > "$state"
-      if [ "$count" -eq 1 ]; then
-        printf '%s\n' '--json'
-      else
-        printf '%s\n' '--json --skip-git-repo-check If `-` is used, read from stdin'
-      fi
-    else
-      printf '%s\n' '--json --sandbox workspace-write --skip-git-repo-check resume instructions are read from stdin'
-    fi
-    """
-  }
 
-  private static func highVolumeHelpScript() -> String {
-    """
-    #!/bin/sh
-    if [ "$1" = "--version" ]; then
-      printf '%s\n' 'codex-cli 0.149.1'
-    elif [ "$1" = "exec" ] && [ "$2" = "resume" ]; then
-      printf '%s\n' '--json --skip-git-repo-check If `-` is used, read from stdin'
-      yes 'bounded capability padding 012345678901234567890123456789' | head -n 24000
-    else
-      printf '%s\n' '--json --sandbox workspace-write --skip-git-repo-check resume instructions are read from stdin'
-      yes 'bounded capability padding 012345678901234567890123456789' | head -n 24000
-    fi
-    """
-  }
+
+
 
   private static func makeExecutable(in directory: URL, name: String, contents: String) throws
     -> URL
@@ -1049,13 +1025,13 @@ enum Gate0ATests {
 
   private static func runFake(
     _ executable: URL, journal: OperationJournal,
-    cancellation: CodexCancellationToken = CodexCancellationToken(),
-    policy: CodexTransportPolicy = CodexTransportPolicy(), prompt: String = "test"
-  ) throws -> CodexTransportResult {
-    let invocation = try CodexInvocation(
-      executableURL: executable, kind: .new, prompt: prompt,
+    cancellation: AgentCancellationToken = AgentCancellationToken(),
+    policy: AgentTransportPolicy = AgentTransportPolicy(), prompt: String = "test"
+  ) throws -> AgentTransportResult {
+    let invocation = try AgentInvocation(
+      executableURL: executable, kind: .new, systemPrompt: testSystemPrompt, prompt: prompt,
       workingDirectory: executable.deletingLastPathComponent())
-    return try DirectProcessCodexTransport().execute(
+    return try DirectProcessAgentTransport().execute(
       invocation, journal: journal, cancellation: cancellation, policy: policy)
   }
 

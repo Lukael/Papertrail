@@ -197,7 +197,7 @@
       }
     }
 
-    public func applyTransportResult(operationID: UUID, result: CodexTransportResult) throws {
+    public func applyTransportResult(operationID: UUID, result: AgentTransportResult) throws {
       let committedError: Error? = try store.transaction { snapshot in
         guard let operationIndex = snapshot.operations.firstIndex(where: { $0.id == operationID })
         else { throw ChatStoreError.operationNotFound }
@@ -237,7 +237,10 @@
             return SessionOperationQueueError.externalThreadMismatch(
               expected: existing, presented: thread)
           }
-          snapshot.sessions[sessionIndex].externalThreadID = thread
+          // An unfinished first turn may leave no resumable transcript; only completion binds.
+          if result.state.outcome == .turnCompleted {
+            snapshot.sessions[sessionIndex].externalThreadID = thread
+          }
         }
         snapshot.operations[operationIndex].processOutcomeRawValue = Self.persisted(result.state.outcome).rawValue
         snapshot.operations[operationIndex].exitCode = Int(result.exitStatus)
@@ -323,7 +326,7 @@
         deliveryState: message.deliveryStateRawValue, createdAt: message.createdAt)
     }
 
-    private static func persisted(_ outcome: CodexOperationOutcome) -> ProcessOutcome {
+    private static func persisted(_ outcome: AgentOperationOutcome) -> ProcessOutcome {
       switch outcome {
       case .running: .running
       case .turnCompleted: .turnCompleted

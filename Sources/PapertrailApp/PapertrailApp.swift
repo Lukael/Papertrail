@@ -35,15 +35,25 @@ struct PapertrailApp: App {
         #if !PPR_PORTABLE_SCHEMA
           let container = try ModelContainerFactory.make(at: resolvedPaths.storeURL)
           resolvedContainer = container
+          let reset = try AgentChatResetMigration.runIfNeeded(
+            container: container, paths: resolvedPaths)
           let issues = try ApplicationLaunchCoordinator.reconcile(
             container: container, paths: resolvedPaths)
         #else
           let store = try ModelContainerFactory.make(at: resolvedPaths.storeURL)
+          let reset = try AgentChatResetMigration.runIfNeeded(store: store, paths: resolvedPaths)
           let issues = try ApplicationLaunchCoordinator.reconcile(
             store: store, paths: resolvedPaths)
         #endif
         if !issues.isEmpty {
           repairMessage = "The local library opened with \(issues.count) recoverable item(s)."
+        }
+        if let reset, reset.deletedSessionCount > 0 || reset.fileCleanupPending {
+          let note =
+            reset.fileCleanupPending
+            ? "Codex chat history was removed for Claude; some chat files still need cleanup and will be retried at next launch."
+            : "Papertrail now uses Claude. Codex chat history was removed; papers and reviews were kept."
+          repairMessage = [repairMessage, note].compactMap { $0 }.joined(separator: " ")
         }
       } catch {
         repairMessage = "The durable local library needs repair: \(error.localizedDescription)"

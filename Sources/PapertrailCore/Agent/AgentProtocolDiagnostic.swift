@@ -1,10 +1,10 @@
 import Foundation
 
-enum CodexTransportProtocolError: Error {
+enum AgentTransportProtocolError: Error {
   case terminalReconciliationFailed
 }
 
-public struct CodexProtocolDiagnostic: Codable, Equatable, Sendable {
+public struct AgentProtocolDiagnostic: Codable, Equatable, Sendable {
   public enum Kind: String, Codable, Sendable {
     case invalidUTF8
     case malformedJSON
@@ -24,22 +24,22 @@ public struct CodexProtocolDiagnostic: Codable, Equatable, Sendable {
     let kind: Kind
     let summary: String
     switch error {
-    case CodexFramingError.invalidUTF8:
+    case AgentFramingError.invalidUTF8:
       kind = .invalidUTF8
       summary =
-        "Codex stdout contained invalid UTF-8. The accepted journal prefix is preserved; start a new operation after checking CLI compatibility."
-    case CodexFramingError.recordTooLarge:
+        "Claude Code stdout contained invalid UTF-8. The accepted journal prefix is preserved; start a new operation after checking CLI compatibility."
+    case AgentFramingError.recordTooLarge:
       kind = .recordTooLarge
       summary =
-        "A Codex JSONL record exceeded the 1 MiB protocol limit. The accepted journal prefix is preserved and the operation must not be resumed automatically."
-    case CodexFramingError.partialRecordAtEOF:
+        "A Claude Code JSONL record exceeded the 1 MiB protocol limit. The accepted journal prefix is preserved and the operation must not be resumed automatically."
+    case AgentFramingError.partialRecordAtEOF:
       kind = .partialRecordAtEOF
       summary =
-        "Codex stdout ended with a partial JSONL record. The accepted journal prefix is preserved; retry only as a new operation."
-    case CodexEventError.invalidJSON:
+        "Claude Code stdout ended with a partial JSONL record. The accepted journal prefix is preserved; retry only as a new operation."
+    case AgentEventError.invalidJSON:
       kind = .malformedJSON
       summary =
-        "Codex stdout contained malformed JSON. The malformed record was rejected and the accepted journal prefix is preserved."
+        "Claude Code stdout contained malformed JSON. The malformed record was rejected and the accepted journal prefix is preserved."
     case OperationJournalError.recordTooLarge:
       kind = .journalRecordTooLarge
       summary =
@@ -48,18 +48,18 @@ public struct CodexProtocolDiagnostic: Codable, Equatable, Sendable {
       kind = .journalTooLarge
       summary =
         "The private operation journal reached its 64 MiB limit. The prior journal prefix is preserved and automatic retry is unsafe."
-    case is CodexProjectionError, is CodexEventError:
+    case is AgentProjectionError, is AgentEventError:
       kind = .projectionFailure
       summary =
-        "A syntactically accepted Codex event violated the frozen projection capability mapping. The event was journaled before rejection."
-    case CodexTransportProtocolError.terminalReconciliationFailed:
+        "A syntactically accepted Claude Code event violated the frozen projection capability mapping. The event was journaled before rejection."
+    case AgentTransportProtocolError.terminalReconciliationFailed:
       kind = .pipelineFailure
       summary =
-        "Codex terminal events or process exit status violated the frozen completion contract. Inspect the preserved raw journal before starting a new operation."
+        "Claude Code terminal events or process exit status violated the frozen completion contract. Inspect the preserved raw journal before starting a new operation."
     default:
       kind = .pipelineFailure
       summary =
-        "The Codex event pipeline failed before terminal reconciliation. The accepted journal prefix is preserved."
+        "The Claude Code event pipeline failed before terminal reconciliation. The accepted journal prefix is preserved."
     }
     return .init(
       kind: kind, summary: String(summary.prefix(512)), acceptedJournalBytes: acceptedJournalBytes)
@@ -76,13 +76,13 @@ public struct CodexProtocolDiagnostic: Codable, Equatable, Sendable {
   }
 }
 
-public enum CodexRetryDisposition: String, Codable, Equatable, Sendable {
+public enum AgentRetryDisposition: String, Codable, Equatable, Sendable {
   case none
   case explicitNewOperationRequired
   case explicitUserDecisionRequired
 }
 
-public struct CodexTransportPolicy: Equatable, Sendable {
+public struct AgentTransportPolicy: Equatable, Sendable {
   public let timeout: TimeInterval
   public let terminationGrace: TimeInterval
 

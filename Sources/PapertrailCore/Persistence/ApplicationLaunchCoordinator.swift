@@ -87,6 +87,7 @@ public enum ApplicationLaunchCoordinator {
                   operationID: operation.id, relativePath: operation.journalRelativePath))
             }
             if snapshot.sessions.first(where: { $0.id == session.id })?.externalThreadID == nil,
+              recovery.operationResult?.outcome == .turnCompleted,
               let externalThreadID = recovery.externalThreadID,
               let sessionIndex = snapshot.sessions.firstIndex(where: { $0.id == session.id })
             {
@@ -214,7 +215,9 @@ public enum ApplicationLaunchCoordinator {
               .corruptOperationJournal(
                 operationID: operation.id, relativePath: operation.journalRelativePath))
           }
-          if session.externalThreadID == nil, let externalThreadID = recovery.externalThreadID {
+          if session.externalThreadID == nil, recovery.operationResult?.outcome == .turnCompleted,
+            let externalThreadID = recovery.externalThreadID
+          {
             session.externalThreadID = externalThreadID
           }
           for recovered in recovery.messages {

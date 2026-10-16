@@ -26,6 +26,8 @@ public struct ReviewGenerationResult: Equatable, Sendable {
   public let evidenceReportState: EvidenceReportState
   public let label: String
   public let selected: Bool
+  /// Model, duration, and cost of the Claude turns that produced a promoted version.
+  public var runSummary: String? = nil
 }
 
 public enum ReviewGenerationServiceError: Error, CustomStringConvertible, LocalizedError {
@@ -79,12 +81,12 @@ public struct ReviewGenerationHooks: @unchecked Sendable {
 public struct ReviewGenerationService: Sendable {
   public let paths: LibraryPaths
   public let store: any ReviewGenerationStore
-  public let transport: any CodexTransport
+  public let transport: any AgentTransport
 
   public init(
     paths: LibraryPaths, store: any ReviewGenerationStore,
-    transport: any CodexTransport = DirectProcessCodexTransport(
-      policy: CodexTransportPolicy(timeout: 1_800))
+    transport: any AgentTransport = DirectProcessAgentTransport(
+      policy: AgentTransportPolicy(timeout: 1_800))
   ) {
     self.paths = paths
     self.store = store
@@ -97,9 +99,9 @@ public struct ReviewGenerationService: Sendable {
     conversation: ReviewConversationSnapshot? = nil,
     metadata: NetworkMetadataResult = .unavailable(reason: "Network metadata was not requested."),
     autoSelect: Bool = true, model: String? = nil,
-    reasoningEffort: CodexReasoningEffort? = nil,
-    cancellation: CodexCancellationToken = .init(),
-    progress: (@Sendable (CodexLiveProgress) -> Void)? = nil,
+    reasoningEffort: AgentReasoningEffort? = nil,
+    cancellation: AgentCancellationToken = .init(),
+    progress: (@Sendable (AgentLiveProgress) -> Void)? = nil,
     hooks: ReviewGenerationHooks = .init(),
     fileManager: FileManager = .default
   ) throws -> ReviewGenerationResult {
@@ -121,6 +123,12 @@ public struct ReviewGenerationService: Sendable {
       throw ReviewGenerationServiceError.sourceHashMismatch
     }
 
+    let promptBuilder = ReviewPromptBuilder()
+    let systemPrompt = promptBuilder.systemPrompt()
+    let requestPrompt = try promptBuilder.requestPrompt(
+      paperText: try extractedText.readText(), paperTextSHA256: extractedText.manifest.textSHA256,
+      conversationJSON: String(decoding: try conversation.encoded(), as: UTF8.self))
+
     let workspace = paths.generationWorkspace(identity.generationID, paperID: paperID)
     let manifest = try ReviewTextWorkspaceBuilder().build(
       extractedText: extractedText, workspace: workspace, conversation: conversation, fileManager: fileManager)
@@ -130,10 +138,7 @@ public struct ReviewGenerationService: Sendable {
       at: workspace.appendingPathComponent(operationOutputRelativePath)
         .deletingLastPathComponent(),
       withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
-    let prompt = ReviewPromptBuilder().productionPrompt(
-      textPath: "input/paper-text.txt", reviewRelativePath: operationOutputRelativePath,
-      conversationPath: "input/conversation.json")
-    let promptHash = SHA256.hash(data: Data(prompt.utf8)).map {
+    let promptHash = SHA256.hash(data: Data((systemPrompt + "\n" + requestPrompt).utf8)).map {
       String(format: "%02x", $0)
     }.joined()
     let operationDirectory = paths.operationDirectory(
@@ -148,7 +153,8 @@ public struct ReviewGenerationService: Sendable {
 
     try writeJSON(manifest, to: workspace.appendingPathComponent("staging-manifest.json"))
     try writeJSON(metadata, to: workspace.appendingPathComponent("metadata-result.json"))
-    try writePrivate(Data(prompt.utf8), to: workspace.appendingPathComponent("prompt.md"))
+    // The staged input files already hold the stdin payload's paper text and conversation.
+    try writePrivate(Data(systemPrompt.utf8), to: workspace.appendingPathComponent("prompt.md"))
     _ = try store.createGeneration(
       generationID: identity.generationID, paperID: paperID, sessionID: identity.sessionID,
       operationID: identity.operationID, workspaceRelativePath: workspaceRelative,
@@ -156,15 +162,31 @@ public struct ReviewGenerationService: Sendable {
       promptSHA256: promptHash, journalRelativePath: journalRelative,
       predecessorGenerationID: predecessorGenerationID)
 
-    let invocation = try CodexInvocation(
-      executableURL: executableURL,
-      kind: .new, prompt: prompt,
-      workingDirectory: workspace, model: model, reasoningEffort: reasoningEffort,
-      ignoreUserConfiguration: true)
-    let result: CodexTransportResult
+    // The review session persists so a rejected document can be corrected by resuming it: the
+    // paper text is then read from Claude's prompt cache instead of being sent and paid for again.
+    let draftProgress = ReviewDraftProgressBox()
+    let reviewProgress: (@Sendable (AgentLiveProgress) -> Void)?
+    if let progress {
+      reviewProgress = { @Sendable update in
+        guard update.kind == .draft else {
+          progress(update)
+          return
+        }
+        if let status = draftProgress.consume(update.text) {
+          progress(AgentLiveProgress(kind: .status, itemID: "review-draft", text: status))
+        }
+      }
+    } else {
+      reviewProgress = nil
+    }
+    let invocation = try AgentInvocation(
+      executableURL: executableURL, kind: .new, systemPrompt: systemPrompt,
+      prompt: requestPrompt, workingDirectory: workspace, model: model,
+      reasoningEffort: reasoningEffort, streamPartialMessages: true)
+    let result: AgentTransportResult
     do {
       result = try transport.execute(
-        invocation, journal: journal, cancellation: cancellation, progress: progress)
+        invocation, journal: journal, cancellation: cancellation, progress: reviewProgress)
       try store.recordProcessResult(generationID: identity.generationID, result: result)
     } catch {
       try? store.recordPreparationFailure(generationID: identity.generationID, outcome: .interrupted)
@@ -184,7 +206,9 @@ public struct ReviewGenerationService: Sendable {
       return ReviewGenerationResult(
         generationID: identity.generationID, versionID: nil,
         processOutcome: Self.persisted(result.state.outcome), structuralValidation: .notRun,
-        evidenceReportState: .missing, label: Self.persisted(result.state.outcome).rawValue,
+        evidenceReportState: .missing,
+        label: Self.persisted(result.state.outcome).rawValue
+          + (result.state.failureDetail.map { " · Claude Code: \($0)" } ?? ""),
         selected: false)
     }
 
@@ -199,46 +223,66 @@ public struct ReviewGenerationService: Sendable {
     try store.transitionStructure(generationID: identity.generationID, to: .running)
 
     let reviewDocumentURL = workspace.appendingPathComponent(operationOutputRelativePath)
-    guard fileManager.fileExists(atPath: reviewDocumentURL.path) else {
-      try store.transitionStructure(generationID: identity.generationID, to: .failed)
-      throw ReviewGenerationServiceError.outputMissing(operationOutputRelativePath)
-    }
-    do {
-      _ = try SecurePathContainment.requireExisting(reviewDocumentURL, inside: workspace)
-      let values = try reviewDocumentURL.resourceValues(forKeys: [
-        .isRegularFileKey, .isSymbolicLinkKey,
-      ])
-      guard values.isRegularFile == true, values.isSymbolicLink != true else {
-        throw ReviewGenerationServiceError.unsafeOutput(operationOutputRelativePath)
-      }
-    } catch {
-      try store.transitionStructure(generationID: identity.generationID, to: .failed)
-      if let serviceError = error as? ReviewGenerationServiceError {
-        throw serviceError
-      }
-      throw ReviewGenerationServiceError.unsafeOutput(operationOutputRelativePath)
-    }
+    let check = ReturnedDocumentCheck(
+      documentURL: reviewDocumentURL, relativePath: operationOutputRelativePath,
+      workspace: workspace, pageTexts: try extractedText.readPages(),
+      conversationMessageIDs: Set(conversation.messages.map(\.id)), fileManager: fileManager)
+    var turns = [result]
     let reviewDocument: ReviewDocumentV1
-    do {
-      _ = try FileFingerprint.read(
-        reviewDocumentURL,
-        maximumByteCount: Int64(ReviewDocumentDecoder.maximumDocumentBytes))
-      let reviewData = try Data(
-        contentsOf: reviewDocumentURL, options: [.mappedIfSafe, .uncached])
-      reviewDocument = try ReviewDocumentDecoder().decode(reviewData)
-    } catch {
-      try store.transitionStructure(generationID: identity.generationID, to: .failed)
-      throw ReviewGenerationServiceError.structuredDocumentInvalid(String(describing: error))
-    }
-    let semanticValidation = ReviewDocumentValidator().validate(
-      reviewDocument, pageTexts: try extractedText.readPages(),
-      conversationMessageIDs: Set(conversation.messages.map(\.id)))
-    try writeJSON(
-      semanticValidation,
-      to: workspace.appendingPathComponent("semantic-validation.json"))
-    guard semanticValidation.passed else {
-      try store.transitionStructure(generationID: identity.generationID, to: .failed)
-      throw ReviewGenerationServiceError.structuredReviewFailed(semanticValidation)
+    while true {
+      let rejection: ReturnedDocumentCheck.Rejection
+      do {
+        reviewDocument = try check.validate(turns[turns.count - 1].state.resultText)
+        break
+      } catch let rejected as ReturnedDocumentCheck.Rejection {
+        rejection = rejected
+      } catch {
+        // Unsafe or planted output paths are never offered for correction.
+        try store.transitionStructure(generationID: identity.generationID, to: .failed)
+        throw error
+      }
+      guard turns.count == 1, let sessionID = result.state.externalThreadID,
+        !cancellation.isCancellationRequested
+      else {
+        try store.transitionStructure(generationID: identity.generationID, to: .failed)
+        throw rejection.serviceError
+      }
+      try check.archiveAttempt(1)
+      progress?(.init(
+        kind: .status, itemID: "review-draft",
+        text: "Correcting \(rejection.findings.count) validation finding(s) in the same session…"))
+      draftProgress.reset()
+      let correction: AgentTransportResult
+      do {
+        correction = try transport.execute(
+          try AgentInvocation(
+            executableURL: executableURL, kind: .resume(sessionID: sessionID),
+            systemPrompt: systemPrompt,
+            prompt: promptBuilder.correctionPrompt(findings: rejection.findings),
+            workingDirectory: workspace, model: model, reasoningEffort: reasoningEffort,
+            streamPartialMessages: true),
+          journal: try OperationJournal(
+            directoryURL: operationDirectory.appendingPathComponent("correction-1")),
+          cancellation: cancellation, progress: reviewProgress)
+      } catch {
+        try store.transitionStructure(generationID: identity.generationID, to: .failed)
+        throw error
+      }
+      if cancellation.isCancellationRequested {
+        try store.transitionStructure(generationID: identity.generationID, to: .failed)
+        try store.transitionProcess(generationID: identity.generationID, to: .cancelled)
+        return ReviewGenerationResult(
+          generationID: identity.generationID, versionID: nil, processOutcome: .cancelled,
+          structuralValidation: .failed, evidenceReportState: .missing,
+          label: ProcessOutcome.cancelled.rawValue, selected: false)
+      }
+      guard correction.state.outcome == .turnCompleted else {
+        try store.transitionStructure(generationID: identity.generationID, to: .failed)
+        throw ReviewGenerationServiceError.structuredDocumentInvalid(
+          "The correction turn did not complete"
+            + (correction.state.failureDetail.map { ": \($0)" } ?? "."))
+      }
+      turns.append(correction)
     }
     try fileManager.setAttributes(
       [.posixPermissions: 0o400], ofItemAtPath: reviewDocumentURL.path)
@@ -325,7 +369,8 @@ public struct ReviewGenerationService: Sendable {
       generationID: identity.generationID, versionID: identity.versionID,
       processOutcome: .turnCompleted, structuralValidation: .passed,
       evidenceReportState: evidenceState,
-      label: ReviewQualityLabel.generatedStructureChecked.rawValue, selected: autoSelect)
+      label: ReviewQualityLabel.generatedStructureChecked.rawValue, selected: autoSelect,
+      runSummary: Self.runSummary(turns.map(\.state)))
   }
 
   private func quarantineGeneratedOutput(
@@ -378,7 +423,22 @@ public struct ReviewGenerationService: Sendable {
     try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
   }
 
-  private static func persisted(_ outcome: CodexOperationOutcome) -> ProcessOutcome {
+  /// "claude-opus-5 · 1m 52s · $0.62 · corrected once" from the turns' result events.
+  static func runSummary(_ states: [AgentProjectedState]) -> String? {
+    var parts: [String] = []
+    if let model = states.lazy.compactMap(\.model).first { parts.append(model) }
+    let milliseconds = states.compactMap(\.durationMilliseconds).reduce(0, +)
+    if milliseconds > 0 {
+      let seconds = Int((Double(milliseconds) / 1000).rounded())
+      parts.append(seconds >= 60 ? "\(seconds / 60)m \(seconds % 60)s" : "\(seconds)s")
+    }
+    let costs = states.compactMap(\.costUSD)
+    if !costs.isEmpty { parts.append(String(format: "$%.2f", costs.reduce(0, +))) }
+    if states.count > 1 { parts.append("corrected once") }
+    return parts.isEmpty ? nil : parts.joined(separator: " · ")
+  }
+
+  private static func persisted(_ outcome: AgentOperationOutcome) -> ProcessOutcome {
     switch outcome {
     case .turnCompleted: .turnCompleted
     case .failed: .failed

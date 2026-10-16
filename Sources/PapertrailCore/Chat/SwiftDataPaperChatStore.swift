@@ -176,7 +176,7 @@
       }
     }
 
-    public func applyTransportResult(operationID: UUID, result: CodexTransportResult) throws {
+    public func applyTransportResult(operationID: UUID, result: AgentTransportResult) throws {
       let committedError: Error? = try write { context in
         guard let operation = try context.fetch(FetchDescriptor<CodexOperation>()).first(where: { $0.id == operationID }),
           let session = try context.fetch(FetchDescriptor<CodexSession>()).first(where: { $0.id == operation.sessionID })
@@ -207,7 +207,8 @@
             return SessionOperationQueueError.externalThreadMismatch(
               expected: existing, presented: thread)
           }
-          session.externalThreadID = thread
+          // An unfinished first turn may leave no resumable transcript; only completion binds.
+          if result.state.outcome == .turnCompleted { session.externalThreadID = thread }
         }
         operation.processOutcomeRawValue = Self.persisted(result.state.outcome).rawValue
         operation.exitCode = Int(result.exitStatus)
@@ -281,7 +282,7 @@
       id: m.id, paperID: m.paperID, sessionID: m.sessionID, operationID: m.operationID,
       role: m.roleRawValue, content: m.committedContent, draft: m.draftContent,
       deliveryState: m.deliveryStateRawValue, createdAt: m.createdAt) }
-    private static func persisted(_ value: CodexOperationOutcome) -> ProcessOutcome {
+    private static func persisted(_ value: AgentOperationOutcome) -> ProcessOutcome {
       switch value { case .running: .running; case .turnCompleted: .turnCompleted; case .failed,.timedOut: .failed; case .cancelled: .cancelled; case .interrupted: .interrupted; case .protocolFailure: .protocolFailure }
     }
   }

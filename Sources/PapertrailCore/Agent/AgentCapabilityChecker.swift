@@ -1,7 +1,7 @@
 import Darwin
 @preconcurrency import Foundation
 
-public struct CodexCapabilityReport: Codable, Equatable, Sendable {
+public struct AgentCapabilityReport: Codable, Equatable, Sendable {
   public enum Status: String, Codable, Sendable {
     case usable, missing, incompatible, loggedOut, invocationFailed
   }
@@ -12,12 +12,18 @@ public struct CodexCapabilityReport: Codable, Equatable, Sendable {
   public let detail: String
 }
 
-public struct CodexCapabilityChecker: Sendable {
-  public static let requiredVersion = (major: 0, minor: 149)
+public struct AgentCapabilityChecker: Sendable {
+  public static let requiredVersion = (major: 2, minor: 1)
+  /// Every option `AgentInvocation` emits must appear in `claude --help`.
+  public static let requiredHelpTokens = [
+    "--print", "--output-format", "stream-json", "--verbose", "--tools", "--strict-mcp-config",
+    "--setting-sources", "--permission-mode", "dontAsk", "--system-prompt", "--model",
+    "--effort", "--include-partial-messages", "--resume", "--no-session-persistence",
+  ]
 
   public init() {}
 
-  public func check(executableURL: URL) -> CodexCapabilityReport {
+  public func check(executableURL: URL) -> AgentCapabilityReport {
     guard executableURL.path.hasPrefix("/"),
       FileManager.default.isExecutableFile(atPath: executableURL.path)
     else {
@@ -27,61 +33,49 @@ public struct CodexCapabilityChecker: Sendable {
     }
     do {
       let version = try run(executableURL, arguments: ["--version"])
+      let versionText = version.output.trimmingCharacters(in: .whitespacesAndNewlines)
       guard version.status == 0, !version.timedOut else {
         return .init(
           status: .invocationFailed, executablePath: executableURL.path,
-          versionOutput: version.output, capabilityEvidence: [],
+          versionOutput: versionText, capabilityEvidence: [],
           detail:
-            "codex --version did not complete cleanly (exit=\(version.status), timedOut=\(version.timedOut), bytes=\(version.output.utf8.count))."
+            "claude --version did not complete cleanly (exit=\(version.status), timedOut=\(version.timedOut), bytes=\(version.output.utf8.count))."
         )
       }
-      let required = [
-        "--json", "--sandbox", "workspace-write", "--skip-git-repo-check", "resume",
-        "instructions are read from stdin",
-      ]
-      let resumeRequired = ["--json", "--skip-git-repo-check", "If `-` is used, read from stdin"]
-      let help = try runHelp(
-        executableURL, arguments: ["exec", "--help"], required: required)
-      let resumeHelp = try runHelp(
-        executableURL, arguments: ["exec", "resume", "--help"], required: resumeRequired)
-      let found = required.filter { help.output.contains($0) }
-      let resumeFound = resumeRequired.filter { resumeHelp.output.contains($0) }
-      let evidence = found + resumeFound
-      let helpMissing = required.filter { !help.output.contains($0) }
-      let resumeMissing = resumeRequired.filter { !resumeHelp.output.contains($0) }
-      let helpInvocationFailed =
-        help.status != 0 || help.timedOut
-        || (!helpMissing.isEmpty && !Self.looksLikeCompleteHelp(help.output))
-      let resumeInvocationFailed =
-        resumeHelp.status != 0 || resumeHelp.timedOut
-        || (!resumeMissing.isEmpty && !Self.looksLikeCompleteHelp(resumeHelp.output))
-      if helpInvocationFailed || resumeInvocationFailed {
+      let help = try runHelp(executableURL)
+      let found = Self.requiredHelpTokens.filter { help.output.contains($0) }
+      let missing = Self.requiredHelpTokens.filter { !help.output.contains($0) }
+      if help.status != 0 || help.timedOut
+        || (!missing.isEmpty && !Self.looksLikeCompleteHelp(help.output))
+      {
         return .init(
           status: .invocationFailed, executablePath: executableURL.path,
-          versionOutput: version.output.trimmingCharacters(in: .whitespacesAndNewlines),
-          capabilityEvidence: evidence,
+          versionOutput: versionText, capabilityEvidence: found,
           detail:
-            "Capability help probe did not return a complete result; this is an invocation failure, not proof of an incompatible CLI. \(Self.probeDetail("exec --help", help, missing: helpMissing)); \(Self.probeDetail("exec resume --help", resumeHelp, missing: resumeMissing))."
+            "Capability help probe did not return a complete result; this is an invocation failure, not proof of an incompatible CLI. \(Self.probeDetail("--help", help, missing: missing))."
         )
       }
-      guard helpMissing.isEmpty, resumeMissing.isEmpty,
-        !Self.exposesOption("--sandbox", in: resumeHelp.output),
-        Self.meetsVersionFloor(version.output)
+      guard missing.isEmpty, Self.meetsVersionFloor(version.output),
+        version.output.contains("Claude Code")
       else {
         return .init(
           status: .incompatible, executablePath: executableURL.path,
-          versionOutput: version.output.trimmingCharacters(in: .whitespacesAndNewlines),
-          capabilityEvidence: evidence,
+          versionOutput: versionText, capabilityEvidence: found,
           detail:
-            "Installed CLI does not meet the frozen Gate 0A capability floor. \(Self.probeDetail("exec --help", help, missing: helpMissing)); \(Self.probeDetail("exec resume --help", resumeHelp, missing: resumeMissing)); resumeExposesSandbox=\(Self.exposesOption("--sandbox", in: resumeHelp.output)); versionFloorMet=\(Self.meetsVersionFloor(version.output))."
+            "Installed CLI does not meet the Claude Code capability floor \(Self.requiredVersion.major).\(Self.requiredVersion.minor). \(Self.probeDetail("--help", help, missing: missing)); versionFloorMet=\(Self.meetsVersionFloor(version.output))."
         )
+      }
+      if try authenticationStatus(executableURL) == false {
+        return .init(
+          status: .loggedOut, executablePath: executableURL.path,
+          versionOutput: versionText, capabilityEvidence: found,
+          detail: "Claude Code is installed but not logged in. Run `claude auth login` in Terminal.")
       }
       return .init(
         status: .usable, executablePath: executableURL.path,
-        versionOutput: version.output.trimmingCharacters(in: .whitespacesAndNewlines),
-        capabilityEvidence: evidence,
+        versionOutput: versionText, capabilityEvidence: found,
         detail:
-          "Capability surface is compatible. Resume does not expose --sandbox, so Papertrail supplies only the fixed workspace-write mode and the exact current workspace through validated config overrides. Authentication is determined only by a real CLI operation; no auth file is read by the app."
+          "Capability surface is compatible. Papertrail runs headless turns with no tools, no MCP servers, and no user or project settings; inputs arrive on stdin and outputs are read from stream-json events."
       )
     } catch {
       return .init(
@@ -90,10 +84,25 @@ public struct CodexCapabilityChecker: Sendable {
     }
   }
 
-  public static func classifyOperationFailure(stderr: String) -> CodexCapabilityReport.Status {
-    let lower = stderr.lowercased()
-    if lower.contains("not logged in") || lower.contains("login required")
-      || lower.contains("authentication required") || lower.contains("unauthorized")
+  /// `claude auth status` prints JSON with a `loggedIn` flag. An unreadable answer returns nil so
+  /// that the real operation, not the probe, decides authentication.
+  private func authenticationStatus(_ executableURL: URL) throws -> Bool? {
+    let result = try run(executableURL, arguments: ["auth", "status"])
+    guard !result.timedOut, let start = result.output.firstIndex(of: "{"),
+      let end = result.output.lastIndex(of: "}"),
+      let object = try? JSONSerialization.jsonObject(
+        with: Data(result.output[start...end].utf8)) as? [String: Any]
+    else { return nil }
+    return object["loggedIn"] as? Bool
+  }
+
+  public static func classifyOperationFailure(diagnostics: [String], stderr: String)
+    -> AgentCapabilityReport.Status
+  {
+    let lower = (diagnostics + [stderr]).joined(separator: "\n").lowercased()
+    if lower.contains("not logged in") || lower.contains("failed to authenticate")
+      || lower.contains("oauth") || lower.contains("/login") || lower.contains("auth login")
+      || lower.contains("invalid api key") || lower.contains("authentication")
     {
       return .loggedOut
     }
@@ -177,21 +186,17 @@ public struct CodexCapabilityChecker: Sendable {
       timedOut: timedOut, attempts: 1)
   }
 
-  private func runHelp(
-    _ executableURL: URL, arguments: [String], required: [String]
-  ) throws -> CommandResult {
+  private func runHelp(_ executableURL: URL) throws -> CommandResult {
     var best: CommandResult?
     for attempt in 1...3 {
-      var result = try run(executableURL, arguments: arguments)
+      var result = try run(executableURL, arguments: ["--help"])
       result.attempts = attempt
       if result.status == 0, !result.timedOut,
-        required.allSatisfy({ result.output.contains($0) })
+        Self.requiredHelpTokens.allSatisfy({ result.output.contains($0) })
       {
         return result
       }
-      if best == nil
-        || Self.probeRank(result, required: required) > Self.probeRank(best!, required: required)
-      {
+      if best == nil || Self.probeRank(result) > Self.probeRank(best!) {
         best = result
       }
       if attempt < 3 { Thread.sleep(forTimeInterval: TimeInterval(attempt) * 0.1) }
@@ -199,13 +204,15 @@ public struct CodexCapabilityChecker: Sendable {
     return best!
   }
 
-  private static func probeRank(_ result: CommandResult, required: [String]) -> Int {
-    let found = required.filter { result.output.contains($0) }.count
+  private static func probeRank(_ result: CommandResult) -> Int {
+    let found = requiredHelpTokens.filter { result.output.contains($0) }.count
     return found * 10_000 + (looksLikeCompleteHelp(result.output) ? 1_000 : 0)
       + (result.status == 0 ? 100 : 0) + (result.timedOut ? 0 : 10)
       + min(result.output.utf8.count, 9)
   }
 
+  /// Child processes never inherit the app environment: API keys, proxies, and `CLAUDE_*`
+  /// overrides stay out, and Claude Code's updater and nonessential traffic are disabled.
   public static func minimalEnvironment(
     source: [String: String] = ProcessInfo.processInfo.environment
   )
@@ -220,6 +227,8 @@ public struct CodexCapabilityChecker: Sendable {
     }
     result["PATH"] = "/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin"
     result["NO_COLOR"] = "1"
+    result["DISABLE_AUTOUPDATER"] = "1"
+    result["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"] = "1"
     return result
   }
 }

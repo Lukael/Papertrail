@@ -1,21 +1,25 @@
 import Foundation
 
-public struct CodexExecutableResolutionError: Error, LocalizedError, Sendable {
-  public let inspectedCandidates: [CodexCapabilityReport]
+public struct AgentExecutableResolutionError: Error, LocalizedError, Sendable {
+  public let inspectedCandidates: [AgentCapabilityReport]
 
-  public init(inspectedCandidates: [CodexCapabilityReport]) {
+  public init(inspectedCandidates: [AgentCapabilityReport]) {
     self.inspectedCandidates = inspectedCandidates
   }
 
   public var errorDescription: String? {
+    if inspectedCandidates.contains(where: { $0.status == .loggedOut }) {
+      return
+        "Claude Code is installed but not logged in. Run `claude auth login` in Terminal, then try again."
+    }
     let failures = inspectedCandidates.map {
       "\($0.executablePath) [\($0.status.rawValue)]: \($0.detail)"
     }.joined(separator: "; ")
-    return "No installed Codex CLI passed the required capability check. \(failures)"
+    return "No installed Claude Code CLI passed the required capability check. \(failures)"
   }
 }
 
-public struct CodexExecutableResolver: Sendable {
+public struct AgentExecutableResolver: Sendable {
   public init() {}
 
   public func resolve(
@@ -23,20 +27,21 @@ public struct CodexExecutableResolver: Sendable {
   ) throws -> URL {
     var candidates: [String] = []
     if let preferredPath, !preferredPath.isEmpty { candidates.append(preferredPath) }
-    // Prefer the independently updated package-manager CLI. Finder-launched apps still fall
-    // back to the bundled ChatGPT runtime when no compatible package-manager CLI is present.
-    candidates.append("/opt/homebrew/bin/codex")
-    if let path = environment["PATH"] {
-      candidates.append(contentsOf: path.split(separator: ":").map { "\($0)/codex" })
+    // Finder-launched apps get a minimal PATH, so the package-manager and native-installer
+    // locations are probed explicitly before the inherited PATH entries.
+    candidates.append("/opt/homebrew/bin/claude")
+    if let home = environment["HOME"], home.hasPrefix("/") {
+      candidates.append("\(home)/.local/bin/claude")
+      candidates.append("\(home)/.claude/local/claude")
     }
-    candidates.append(contentsOf: [
-      "/Applications/ChatGPT.app/Contents/Resources/codex",
-      "/usr/local/bin/codex",
-    ])
+    if let path = environment["PATH"] {
+      candidates.append(contentsOf: path.split(separator: ":").map { "\($0)/claude" })
+    }
+    candidates.append("/usr/local/bin/claude")
 
     var inspected = Set<URL>()
-    var reports: [CodexCapabilityReport] = []
-    let capabilityChecker = CodexCapabilityChecker()
+    var reports: [AgentCapabilityReport] = []
+    let capabilityChecker = AgentCapabilityChecker()
     for candidate in candidates {
       let url = URL(fileURLWithPath: candidate).standardizedFileURL
       guard inspected.insert(url).inserted, url.path.hasPrefix("/"),
@@ -52,16 +57,16 @@ public struct CodexExecutableResolver: Sendable {
       return url
     }
     if !reports.isEmpty {
-      throw CodexExecutableResolutionError(inspectedCandidates: reports)
+      throw AgentExecutableResolutionError(inspectedCandidates: reports)
     }
-    throw CodexInvocationError.executableNotRunnable
+    throw AgentInvocationError.executableNotRunnable
   }
 }
 
 /// Shares one capability probe across app features and keeps the blocking CLI checks away from
-/// the main actor. Failed probes are not cached so a repaired or newly installed CLI can be used
-/// by the next operation without relaunching Papertrail.
-public actor CodexExecutableProvider {
+/// the main actor. Failed probes are not cached so a repaired, newly installed, or newly logged-in
+/// CLI can be used by the next operation without relaunching Papertrail.
+public actor AgentExecutableProvider {
   private let preferredPath: String?
   private let environment: [String: String]
   private var resolutionTask: Task<URL, Error>?
@@ -79,7 +84,7 @@ public actor CodexExecutableProvider {
     let preferredPath = preferredPath
     let environment = environment
     let task = Task.detached(priority: .userInitiated) {
-      try CodexExecutableResolver().resolve(
+      try AgentExecutableResolver().resolve(
         preferredPath: preferredPath, environment: environment)
     }
     resolutionTask = task

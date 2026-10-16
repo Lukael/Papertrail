@@ -2,39 +2,39 @@ import Darwin
 @preconcurrency import Foundation
 import PPRProcessSupervisor
 
-public protocol CodexTransport: Sendable {
+public protocol AgentTransport: Sendable {
   func execute(
-    _ invocation: CodexInvocation, journal: OperationJournal, cancellation: CodexCancellationToken
-  ) throws -> CodexTransportResult
+    _ invocation: AgentInvocation, journal: OperationJournal, cancellation: AgentCancellationToken
+  ) throws -> AgentTransportResult
   func execute(
-    _ invocation: CodexInvocation, journal: OperationJournal, cancellation: CodexCancellationToken,
-    progress: (@Sendable (CodexLiveProgress) -> Void)?
-  ) throws -> CodexTransportResult
+    _ invocation: AgentInvocation, journal: OperationJournal, cancellation: AgentCancellationToken,
+    progress: (@Sendable (AgentLiveProgress) -> Void)?
+  ) throws -> AgentTransportResult
 }
 
-extension CodexTransport {
+extension AgentTransport {
   public func execute(
-    _ invocation: CodexInvocation, journal: OperationJournal, cancellation: CodexCancellationToken,
-    progress: (@Sendable (CodexLiveProgress) -> Void)?
-  ) throws -> CodexTransportResult {
+    _ invocation: AgentInvocation, journal: OperationJournal, cancellation: AgentCancellationToken,
+    progress: (@Sendable (AgentLiveProgress) -> Void)?
+  ) throws -> AgentTransportResult {
     try execute(invocation, journal: journal, cancellation: cancellation)
   }
 }
 
-public struct CodexTransportResult: Sendable {
-  public let state: CodexProjectedState
+public struct AgentTransportResult: Sendable {
+  public let state: AgentProjectedState
   public let exitStatus: Int32
   public let terminationReason: Process.TerminationReason
   public let stderr: Data
-  public let protocolDiagnostic: CodexProtocolDiagnostic?
+  public let protocolDiagnostic: AgentProtocolDiagnostic?
   public let diagnosticArtifactURL: URL?
-  public let retryDisposition: CodexRetryDisposition
+  public let retryDisposition: AgentRetryDisposition
 
   public init(
-    state: CodexProjectedState, exitStatus: Int32,
+    state: AgentProjectedState, exitStatus: Int32,
     terminationReason: Process.TerminationReason, stderr: Data,
-    protocolDiagnostic: CodexProtocolDiagnostic? = nil,
-    diagnosticArtifactURL: URL? = nil, retryDisposition: CodexRetryDisposition = .none
+    protocolDiagnostic: AgentProtocolDiagnostic? = nil,
+    diagnosticArtifactURL: URL? = nil, retryDisposition: AgentRetryDisposition = .none
   ) {
     self.state = state
     self.exitStatus = exitStatus
@@ -46,7 +46,7 @@ public struct CodexTransportResult: Sendable {
   }
 }
 
-public final class CodexCancellationToken: @unchecked Sendable {
+public final class AgentCancellationToken: @unchecked Sendable {
   private let lock = NSLock()
   private var process: OwnedProcessSupervisor?
   private var reason: RequestReason?
@@ -94,37 +94,36 @@ public final class CodexCancellationToken: @unchecked Sendable {
   }
 }
 
-public struct DirectProcessCodexTransport: CodexTransport, Sendable {
-  private let defaultPolicy: CodexTransportPolicy
+public struct DirectProcessAgentTransport: AgentTransport, Sendable {
+  private let defaultPolicy: AgentTransportPolicy
 
-  public init(policy: CodexTransportPolicy = .init()) {
+  public init(policy: AgentTransportPolicy = .init()) {
     defaultPolicy = policy
   }
 
   public func execute(
-    _ invocation: CodexInvocation, journal: OperationJournal,
-    cancellation: CodexCancellationToken = .init()
-  ) throws -> CodexTransportResult {
+    _ invocation: AgentInvocation, journal: OperationJournal,
+    cancellation: AgentCancellationToken = .init()
+  ) throws -> AgentTransportResult {
     try execute(invocation, journal: journal, cancellation: cancellation, progress: nil)
   }
 
   public func execute(
-    _ invocation: CodexInvocation, journal: OperationJournal,
-    cancellation: CodexCancellationToken = .init(),
-    progress: (@Sendable (CodexLiveProgress) -> Void)?
-  ) throws -> CodexTransportResult {
+    _ invocation: AgentInvocation, journal: OperationJournal,
+    cancellation: AgentCancellationToken = .init(),
+    progress: (@Sendable (AgentLiveProgress) -> Void)?
+  ) throws -> AgentTransportResult {
     try execute(
       invocation, journal: journal, cancellation: cancellation, policy: defaultPolicy,
       progress: progress)
   }
 
   public func execute(
-    _ invocation: CodexInvocation, journal: OperationJournal,
-    cancellation: CodexCancellationToken = .init(), policy: CodexTransportPolicy,
-    progress: (@Sendable (CodexLiveProgress) -> Void)? = nil
-  ) throws -> CodexTransportResult {
-    try CodexInvocation.validate(
-      arguments: invocation.arguments, workingDirectory: invocation.workingDirectory)
+    _ invocation: AgentInvocation, journal: OperationJournal,
+    cancellation: AgentCancellationToken = .init(), policy: AgentTransportPolicy,
+    progress: (@Sendable (AgentLiveProgress) -> Void)? = nil
+  ) throws -> AgentTransportResult {
+    try AgentInvocation.validate(arguments: invocation.arguments)
     let stdout = Pipe()
     let stderr = Pipe()
     let stdin = Pipe()
@@ -148,7 +147,7 @@ public struct DirectProcessCodexTransport: CodexTransport, Sendable {
     let stderrErrorBox = ErrorBox()
     let process = try OwnedProcessSupervisor.spawn(
       invocation: invocation,
-      environment: CodexCapabilityChecker.minimalEnvironment(),
+      environment: AgentCapabilityChecker.minimalEnvironment(),
       stdinFD: stdin.fileHandleForReading.fileDescriptor,
       stdoutFD: stdout.fileHandleForWriting.fileDescriptor,
       stderrFD: stderr.fileHandleForWriting.fileDescriptor)
@@ -249,12 +248,12 @@ public struct DirectProcessCodexTransport: CodexTransport, Sendable {
     let diagnosticError: Error? =
       projectionBox.error()
       ?? (projector.state.outcome == .protocolFailure
-        ? CodexTransportProtocolError.terminalReconciliationFailed : nil)
+        ? AgentTransportProtocolError.terminalReconciliationFailed : nil)
     let protocolDiagnostic = diagnosticError.map {
-      CodexProtocolDiagnostic.classify($0, acceptedJournalBytes: journal.sizeBytes)
+      AgentProtocolDiagnostic.classify($0, acceptedJournalBytes: journal.sizeBytes)
     }
     let diagnosticArtifactURL = try protocolDiagnostic?.persist(in: journal.directoryURL)
-    let retryDisposition: CodexRetryDisposition
+    let retryDisposition: AgentRetryDisposition
     switch projector.state.outcome {
     case .turnCompleted:
       retryDisposition = .none
@@ -263,7 +262,7 @@ public struct DirectProcessCodexTransport: CodexTransport, Sendable {
     case .timedOut, .interrupted, .protocolFailure, .running:
       retryDisposition = .explicitNewOperationRequired
     }
-    return CodexTransportResult(
+    return AgentTransportResult(
       state: projector.state,
       exitStatus: termination.status,
       terminationReason: termination.reason,
@@ -298,7 +297,7 @@ private final class OwnedProcessSupervisor: @unchecked Sendable {
   }
 
   static func spawn(
-    invocation: CodexInvocation,
+    invocation: AgentInvocation,
     environment: [String: String],
     stdinFD: Int32,
     stdoutFD: Int32,
@@ -428,31 +427,45 @@ private final class ErrorBox: @unchecked Sendable {
 private final class ProjectionBox: @unchecked Sendable {
   private let lock = NSLock()
   private let journal: OperationJournal
-  private var framer = CodexJSONLFramer()
-  private var eventProjector = CodexEventProjector()
+  private var framer = AgentJSONLFramer()
+  private var eventProjector = AgentEventProjector()
   private var projectionError: Error?
-  private let progress: (@Sendable (CodexLiveProgress) -> Void)?
+  private var reportedThinkingTokens = 0
+  private let progress: (@Sendable (AgentLiveProgress) -> Void)?
 
   init(
     journal: OperationJournal,
-    progress: (@Sendable (CodexLiveProgress) -> Void)? = nil
+    progress: (@Sendable (AgentLiveProgress) -> Void)? = nil
   ) {
     self.journal = journal
     self.progress = progress
   }
 
   func consume(_ data: Data) throws {
-    let updates: [CodexLiveProgress] = try lock.withLock {
+    let updates: [AgentLiveProgress] = try lock.withLock {
       guard projectionError == nil else { return [] }
-      var updates: [CodexLiveProgress] = []
+      var updates: [AgentLiveProgress] = []
       let batch = framer.consume(data)
       for raw in batch.records {
-        let event = try CodexEvent(raw: raw)
+        let event = try AgentEvent(raw: raw)
+        // Streamed deltas and thinking-token counters carry no projected state and arrive per
+        // chunk, so they update progress without an fsync'd journal record each.
+        if event.isStreamingDelta {
+          if let text = event.partialText, !text.isEmpty {
+            updates.append(.init(kind: .draft, text: text))
+          } else if let tokens = event.estimatedTokens,
+            let update = AgentLiveProgress.thinkingUpdate(
+              estimatedTokens: tokens, previouslyReported: &reportedThinkingTokens)
+          {
+            updates.append(update)
+          }
+          continue
+        }
         // A syntactically accepted event is durable before any projection or
         // capability-floor validation can mutate/reject visible state.
         try journal.append(raw)
         try eventProjector.project(event)
-        if let update = CodexLiveProgress.visibleUpdate(for: event) { updates.append(update) }
+        if let update = AgentLiveProgress.visibleUpdate(for: event) { updates.append(update) }
       }
       if let error = batch.error { throw error }
       return updates
@@ -462,6 +475,6 @@ private final class ProjectionBox: @unchecked Sendable {
 
   func finish() throws { try lock.withLock { try framer.finish() } }
   func fail(_ error: Error) { lock.withLock { projectionError = error } }
-  func projector() -> CodexEventProjector { lock.withLock { eventProjector } }
+  func projector() -> AgentEventProjector { lock.withLock { eventProjector } }
   func error() -> Error? { lock.withLock { projectionError } }
 }

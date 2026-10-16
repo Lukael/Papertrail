@@ -21,7 +21,6 @@ private enum PDFSelectionPurpose {
 }
 
 struct PaperLibraryView: View {
-  @Environment(\.scenePhase) private var scenePhase
   let launchRepairMessage: String?
   @StateObject private var controller: PaperLibraryController
   @State private var selectedPaperID: UUID?
@@ -32,6 +31,7 @@ struct PaperLibraryView: View {
   @State private var paperPendingRename: PaperListItem?
   @State private var editedPaperTitle = ""
   @State private var showsAppInformation = false
+  @State private var showsLaunchNotice = true
   @State private var titleQuery = ""
   @State private var paperEditingTags: PaperListItem?
 
@@ -132,15 +132,21 @@ struct PaperLibraryView: View {
       }
       .navigationTitle("Papers")
     } detail: {
-      if let selectedPaper {
-        PaperWorkspaceView(
-          paper: selectedPaper, controller: controller,
-          reviewController: controller.reviewController(paperID: selectedPaper.id),
-          chatController: controller.chatController(paperID: selectedPaper.id)
-        )
-        .id(selectedPaper.id)
-      } else {
-        ContentUnavailableView("Select a paper", systemImage: "sidebar.left")
+      // The notice is laid out inside the detail column: split-view columns pin their own
+      // headers and composer and do not honor a safe-area inset applied to the split view.
+      VStack(spacing: 0) {
+        launchNotice
+        if let selectedPaper {
+          PaperWorkspaceView(
+            paper: selectedPaper, controller: controller,
+            reviewController: controller.reviewController(paperID: selectedPaper.id),
+            chatController: controller.chatController(paperID: selectedPaper.id)
+          )
+          .id(selectedPaper.id)
+        } else {
+          ContentUnavailableView("Select a paper", systemImage: "sidebar.left")
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
       }
     }
     .sheet(item: $paperEditingTags) { paper in
@@ -266,61 +272,14 @@ struct PaperLibraryView: View {
     } message: {
       Text(controller.notice ?? "")
     }
-    .safeAreaInset(edge: .top) {
-      if let launchRepairMessage {
-        HStack {
-          Label(launchRepairMessage, systemImage: "wrench.and.screwdriver")
-          Spacer()
-        }
-        .font(.callout)
-        .padding(10)
-        .background(.orange.opacity(0.18))
-      }
-    }
     .toolbar {
       ToolbarItemGroup(placement: .automatic) {
-        Menu {
-          ForEach(controller.codexModels) { model in
-            Menu {
-              ForEach([CodexReasoningEffort.automatic] + model.supportedEfforts) { effort in
-                Button {
-                  controller.selectCodexModel(model, effort: effort)
-                } label: {
-                  if controller.codexModel == model && controller.codexEffort == effort {
-                    Label(effort.title, systemImage: "checkmark")
-                  } else {
-                    Text(effort.title)
-                  }
-                }
-              }
-            } label: {
-              if controller.codexModel == model {
-                Label(model.title, systemImage: "checkmark")
-              } else {
-                Text(model.title)
-              }
-            }
-          }
-          Divider()
-          Button(controller.isRefreshingCodexModels ? "Updating models…" : "Refresh models") {
-            Task { await controller.refreshCodexModels(force: true) }
-          }
-          .disabled(controller.isRefreshingCodexModels)
-          if let error = controller.codexModelsError {
-            Text(error)
-          }
-        } label: {
-          Text("\(controller.codexModel.title) · \(controller.codexEffort.title)")
-            .lineLimit(1)
-            .fixedSize(horizontal: true, vertical: false)
-            .frame(minWidth: 170, alignment: .leading)
-        }
-        .fixedSize(horizontal: true, vertical: false)
-        .accessibilityLabel(
-          "Codex model \(controller.codexModel.title), reasoning effort \(controller.codexEffort.title)")
-        .help(
-          "Models update automatically. Choose a model and its supported reasoning effort for new operations."
-        )
+        modelMenu(
+          purpose: "Chat", model: controller.agentModel, effort: controller.agentEffort,
+          select: controller.selectAgentModel)
+        modelMenu(
+          purpose: "Review", model: controller.reviewModel, effort: controller.reviewEffort,
+          select: controller.selectReviewModel)
         Button("App information", systemImage: "info.circle") {
           showsAppInformation.toggle()
         }
@@ -360,18 +319,61 @@ struct PaperLibraryView: View {
       }
     }
     .animation(.easeOut(duration: 0.16), value: showsAppInformation)
-    .task { await controller.refreshCodexModels() }
-    .task(id: scenePhase) {
-      guard scenePhase == .active else { return }
-      while !Task.isCancelled {
-        do { try await Task.sleep(for: .seconds(900)) } catch { return }
-        await controller.refreshCodexModels()
+  }
+
+  /// One model menu per purpose: chat turns and review documents keep separate selections.
+  private func modelMenu(
+    purpose: String, model selected: AgentModelSelection, effort selectedEffort: AgentReasoningEffort,
+    select: @escaping (AgentModelSelection, AgentReasoningEffort) -> Void
+  ) -> some View {
+    Menu {
+      ForEach(controller.agentModels) { model in
+        Menu {
+          ForEach([AgentReasoningEffort.automatic] + model.supportedEfforts) { effort in
+            Button {
+              select(model, effort)
+            } label: {
+              if selected == model && selectedEffort == effort {
+                Label(effort.title, systemImage: "checkmark")
+              } else {
+                Text(effort.title)
+              }
+            }
+          }
+        } label: {
+          if selected == model {
+            Label(model.title, systemImage: "checkmark")
+          } else {
+            Text(model.title)
+          }
+        }
       }
+    } label: {
+      Text("\(purpose) · \(selected.title) · \(selectedEffort.title)")
+        .lineLimit(1)
+        .fixedSize(horizontal: true, vertical: false)
+        .frame(minWidth: 170, alignment: .leading)
     }
-    .onChange(of: scenePhase) { _, phase in
-      if phase == .active {
-        Task { await controller.refreshCodexModels() }
+    .fixedSize(horizontal: true, vertical: false)
+    .accessibilityLabel("\(purpose) model \(selected.title), effort \(selectedEffort.title)")
+    .help(
+      "Choose the Claude model family and effort level for new \(purpose.lowercased()) operations. Claude Code resolves each family to its newest model."
+    )
+  }
+
+  @ViewBuilder private var launchNotice: some View {
+    if let launchRepairMessage, showsLaunchNotice {
+      HStack(alignment: .firstTextBaseline) {
+        Label(launchRepairMessage, systemImage: "wrench.and.screwdriver")
+        Spacer()
+        Button("Dismiss", systemImage: "xmark") { showsLaunchNotice = false }
+          .labelStyle(.iconOnly)
+          .buttonStyle(.borderless)
+          .help("Hide this notice")
       }
+      .font(.callout)
+      .padding(10)
+      .background(.orange.opacity(0.18))
     }
   }
 
@@ -402,9 +404,9 @@ struct PaperLibraryView: View {
         Label("Review renderer", systemImage: "network.slash")
           .font(.callout.weight(.semibold))
         Text("Local-only WebView · JavaScript, bridges, remote resources, downloads, and popups are disabled.")
-        Label("Codex process", systemImage: "exclamationmark.shield")
+        Label("Claude process", systemImage: "exclamationmark.shield")
           .font(.callout.weight(.semibold))
-        Text("Workspace writes are allowed with the accepted residual read, network, and process-spawning authority.")
+        Text("Headless Claude Code runs with no tools, MCP servers, or user settings. The app supplies paper text on input and writes every output itself.")
       }
       .foregroundStyle(.secondary)
     }
