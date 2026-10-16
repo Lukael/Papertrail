@@ -228,65 +228,99 @@ public struct ReviewGenerationService: Sendable {
       workspace: workspace, pageTexts: try extractedText.readPages(),
       conversationMessageIDs: Set(conversation.messages.map(\.id)), fileManager: fileManager)
     var turns = [result]
-    let reviewDocument: ReviewDocumentV1
-    while true {
-      let rejection: ReturnedDocumentCheck.Rejection
-      do {
-        reviewDocument = try check.validate(turns[turns.count - 1].state.resultText)
-        break
-      } catch let rejected as ReturnedDocumentCheck.Rejection {
-        rejection = rejected
-      } catch {
-        // Unsafe or planted output paths are never offered for correction.
-        try store.transitionStructure(generationID: identity.generationID, to: .failed)
-        throw error
+    var omissions = ReviewOmissions()
+    let reviewDocument: ReviewDocumentV2
+    do {
+      reviewDocument = try check.validate(result.state.resultText)
+    } catch let first as ReturnedDocumentCheck.Rejection {
+      var rejection = first
+      var corrected: ReviewDocumentV2?
+      if let sessionID = result.state.externalThreadID, !cancellation.isCancellationRequested {
+        try check.archiveAttempt(1)
+        progress?(.init(
+          kind: .status, itemID: "review-draft",
+          text: "Correcting \(first.findings.count) validation finding(s) in the same session…"))
+        draftProgress.reset()
+        let correction: AgentTransportResult
+        do {
+          correction = try transport.execute(
+            try AgentInvocation(
+              executableURL: executableURL, kind: .resume(sessionID: sessionID),
+              systemPrompt: systemPrompt,
+              prompt: promptBuilder.correctionPrompt(
+                findings: first.findings, document: first.document),
+              workingDirectory: workspace, model: model, reasoningEffort: reasoningEffort,
+              streamPartialMessages: true),
+            journal: try OperationJournal(
+              directoryURL: operationDirectory.appendingPathComponent("correction-1")),
+            cancellation: cancellation, progress: reviewProgress)
+        } catch {
+          try store.transitionStructure(generationID: identity.generationID, to: .failed)
+          throw error
+        }
+        if cancellation.isCancellationRequested {
+          try store.transitionStructure(generationID: identity.generationID, to: .failed)
+          try store.transitionProcess(generationID: identity.generationID, to: .cancelled)
+          return ReviewGenerationResult(
+            generationID: identity.generationID, versionID: nil, processOutcome: .cancelled,
+            structuralValidation: .failed, evidenceReportState: .missing,
+            label: ProcessOutcome.cancelled.rawValue, selected: false)
+        }
+        guard correction.state.outcome == .turnCompleted else {
+          try store.transitionStructure(generationID: identity.generationID, to: .failed)
+          throw ReviewGenerationServiceError.structuredDocumentInvalid(
+            "The correction turn did not complete"
+              + (correction.state.failureDetail.map { ": \($0)" } ?? "."))
+        }
+        turns.append(correction)
+        do {
+          corrected = try check.validate(correction.state.resultText, correcting: first.document)
+        } catch let second as ReturnedDocumentCheck.Rejection {
+          rejection = second
+        } catch {
+          try store.transitionStructure(generationID: identity.generationID, to: .failed)
+          throw error
+        }
       }
-      guard turns.count == 1, let sessionID = result.state.externalThreadID,
-        !cancellation.isCancellationRequested
-      else {
-        try store.transitionStructure(generationID: identity.generationID, to: .failed)
-        throw rejection.serviceError
+      if let corrected {
+        reviewDocument = corrected
+      } else {
+        // Last resort: drop excerpts the paper does not contain and whatever rested only on them,
+        // rather than discarding a long generation over a few unverifiable quotes.
+        guard let candidate = rejection.document ?? first.document else {
+          try store.transitionStructure(generationID: identity.generationID, to: .failed)
+          throw rejection.serviceError
+        }
+        let pruned = candidate.pruningUnverifiedEvidence(pageTexts: check.pageTexts)
+        guard !pruned.omissions.isEmpty,
+          ReviewDocumentValidator().validate(
+            pruned.document, pageTexts: check.pageTexts,
+            conversationMessageIDs: check.conversationMessageIDs
+          ).passed
+        else {
+          try store.transitionStructure(generationID: identity.generationID, to: .failed)
+          throw rejection.serviceError
+        }
+        reviewDocument = pruned.document
+        omissions = pruned.omissions
+        try writeJSON(omissions, to: workspace.appendingPathComponent("evidence-pruning.json"))
+        progress?(.init(
+          kind: .status, itemID: "review-draft",
+          text: "Removed \(omissions.evidence.count) unverifiable excerpt(s) and what rested only on them."))
       }
-      try check.archiveAttempt(1)
-      progress?(.init(
-        kind: .status, itemID: "review-draft",
-        text: "Correcting \(rejection.findings.count) validation finding(s) in the same session…"))
-      draftProgress.reset()
-      let correction: AgentTransportResult
-      do {
-        correction = try transport.execute(
-          try AgentInvocation(
-            executableURL: executableURL, kind: .resume(sessionID: sessionID),
-            systemPrompt: systemPrompt,
-            prompt: promptBuilder.correctionPrompt(findings: rejection.findings),
-            workingDirectory: workspace, model: model, reasoningEffort: reasoningEffort,
-            streamPartialMessages: true),
-          journal: try OperationJournal(
-            directoryURL: operationDirectory.appendingPathComponent("correction-1")),
-          cancellation: cancellation, progress: reviewProgress)
-      } catch {
-        try store.transitionStructure(generationID: identity.generationID, to: .failed)
-        throw error
-      }
-      if cancellation.isCancellationRequested {
-        try store.transitionStructure(generationID: identity.generationID, to: .failed)
-        try store.transitionProcess(generationID: identity.generationID, to: .cancelled)
-        return ReviewGenerationResult(
-          generationID: identity.generationID, versionID: nil, processOutcome: .cancelled,
-          structuralValidation: .failed, evidenceReportState: .missing,
-          label: ProcessOutcome.cancelled.rawValue, selected: false)
-      }
-      guard correction.state.outcome == .turnCompleted else {
-        try store.transitionStructure(generationID: identity.generationID, to: .failed)
-        throw ReviewGenerationServiceError.structuredDocumentInvalid(
-          "The correction turn did not complete"
-            + (correction.state.failureDetail.map { ": \($0)" } ?? "."))
-      }
-      turns.append(correction)
+    } catch {
+      // Unsafe or planted output paths are never offered for correction.
+      try store.transitionStructure(generationID: identity.generationID, to: .failed)
+      throw error
     }
     try fileManager.setAttributes(
       [.posixPermissions: 0o400], ofItemAtPath: reviewDocumentURL.path)
-    let renderedHTML = ReviewHTMLRenderer().render(document: reviewDocument)
+    var math: (@Sendable (String, Bool) -> String)?
+    if let renderer = try? ChatMathRenderer.shared.get() {
+      math = { latex, display in renderer.mathML(latex, display: display) }
+    }
+    let renderedHTML = ReviewHTMLRenderer(math: math)
+      .render(document: reviewDocument, omissions: omissions)
 
     let finalVersion = paths.reviewVersion(
       identity.versionID, generationID: identity.generationID, paperID: paperID)
@@ -370,7 +404,7 @@ public struct ReviewGenerationService: Sendable {
       processOutcome: .turnCompleted, structuralValidation: .passed,
       evidenceReportState: evidenceState,
       label: ReviewQualityLabel.generatedStructureChecked.rawValue, selected: autoSelect,
-      runSummary: Self.runSummary(turns.map(\.state)))
+      runSummary: Self.runSummary(turns.map(\.state), removedExcerpts: omissions.evidence.count))
   }
 
   private func quarantineGeneratedOutput(
@@ -424,7 +458,7 @@ public struct ReviewGenerationService: Sendable {
   }
 
   /// "claude-opus-5 · 1m 52s · $0.62 · corrected once" from the turns' result events.
-  static func runSummary(_ states: [AgentProjectedState]) -> String? {
+  static func runSummary(_ states: [AgentProjectedState], removedExcerpts: Int = 0) -> String? {
     var parts: [String] = []
     if let model = states.lazy.compactMap(\.model).first { parts.append(model) }
     let milliseconds = states.compactMap(\.durationMilliseconds).reduce(0, +)
@@ -435,6 +469,9 @@ public struct ReviewGenerationService: Sendable {
     let costs = states.compactMap(\.costUSD)
     if !costs.isEmpty { parts.append(String(format: "$%.2f", costs.reduce(0, +))) }
     if states.count > 1 { parts.append("corrected once") }
+    if removedExcerpts > 0 {
+      parts.append("\(removedExcerpts) unverifiable excerpt\(removedExcerpts == 1 ? "" : "s") removed")
+    }
     return parts.isEmpty ? nil : parts.joined(separator: " · ")
   }
 

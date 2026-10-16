@@ -8,6 +8,8 @@ struct ReturnedDocumentCheck {
   struct Rejection: Error {
     let findings: [StructuredReviewValidationFinding]
     let serviceError: ReviewGenerationServiceError
+    /// The readable document when only its content failed, for a patch or pruning.
+    var document: ReviewDocumentV2? = nil
   }
 
   let documentURL: URL
@@ -19,35 +21,35 @@ struct ReturnedDocumentCheck {
 
   private var validationURL: URL { workspace.appendingPathComponent("semantic-validation.json") }
 
-  func validate(_ resultText: String?) throws -> ReviewDocumentV1 {
-    let returned: Data
+  /// Validates a returned document. When `previous` is given and the result is a correction
+  /// patch rather than a whole document, the patch is kept beside the output and applied to it.
+  func validate(_ resultText: String?, correcting previous: ReviewDocumentV2? = nil) throws
+    -> ReviewDocumentV2
+  {
+    var returned: Data
     do {
       returned = try ReviewPromptBuilder.extractDocument(from: resultText)
     } catch {
       throw Rejection(
         findings: [.init(code: "invalid-document", path: "$", message: error.localizedDescription)],
-        serviceError: .structuredDocumentInvalid(error.localizedDescription))
+        serviceError: .structuredDocumentInvalid(error.localizedDescription), document: previous)
     }
-    // `attributesOfItem` reports a dangling symlink without following it.
-    guard (try? fileManager.attributesOfItem(atPath: documentURL.path)) == nil else {
-      throw ReviewGenerationServiceError.unsafeOutput(relativePath)
-    }
-    try writePrivate(returned, to: documentURL)
-    guard fileManager.fileExists(atPath: documentURL.path) else {
-      throw ReviewGenerationServiceError.outputMissing(relativePath)
-    }
-    do {
-      _ = try SecurePathContainment.requireExisting(documentURL, inside: workspace)
-      let values = try documentURL.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey])
-      guard values.isRegularFile == true, values.isSymbolicLink != true else {
-        throw ReviewGenerationServiceError.unsafeOutput(relativePath)
+    if let previous, !ReviewDocumentDecoder.isWholeDocument(returned) {
+      try writeOutput(returned, to: patchURL)
+      let patch: ReviewDocumentPatch
+      do {
+        patch = try ReviewDocumentDecoder().decodePatch(returned)
+      } catch {
+        throw Rejection(
+          findings: [.init(code: "schema", path: "$", message: String(describing: error))],
+          serviceError: .structuredDocumentInvalid(String(describing: error)), document: previous)
       }
-    } catch let error as ReviewGenerationServiceError {
-      throw error
-    } catch {
-      throw ReviewGenerationServiceError.unsafeOutput(relativePath)
+      let encoder = JSONEncoder()
+      encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+      returned = try encoder.encode(previous.applying(patch))
     }
-    let document: ReviewDocumentV1
+    try writeOutput(returned, to: documentURL)
+    let document: ReviewDocumentV2
     do {
       _ = try FileFingerprint.read(
         documentURL, maximumByteCount: Int64(ReviewDocumentDecoder.maximumDocumentBytes))
@@ -56,7 +58,7 @@ struct ReturnedDocumentCheck {
     } catch {
       throw Rejection(
         findings: [.init(code: "schema", path: "$", message: String(describing: error))],
-        serviceError: .structuredDocumentInvalid(String(describing: error)))
+        serviceError: .structuredDocumentInvalid(String(describing: error)), document: previous)
     }
     let report = ReviewDocumentValidator().validate(
       document, pageTexts: pageTexts, conversationMessageIDs: conversationMessageIDs)
@@ -64,7 +66,8 @@ struct ReturnedDocumentCheck {
     encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
     try writePrivate(try encoder.encode(report), to: validationURL)
     guard report.passed else {
-      throw Rejection(findings: report.findings, serviceError: .structuredReviewFailed(report))
+      throw Rejection(
+        findings: report.findings, serviceError: .structuredReviewFailed(report), document: document)
     }
     return document
   }
@@ -72,10 +75,37 @@ struct ReturnedDocumentCheck {
   /// Keeps a rejected attempt and its findings beside the output for audit, freeing the paths
   /// for the corrected document.
   func archiveAttempt(_ number: Int) throws {
-    for url in [documentURL, validationURL] where fileManager.fileExists(atPath: url.path) {
+    for url in [documentURL, validationURL, patchURL] where fileManager.fileExists(atPath: url.path) {
       let archived = url.deletingPathExtension()
         .appendingPathExtension("attempt-\(number).json")
       try fileManager.moveItem(at: url, to: archived)
+    }
+  }
+
+  private var patchURL: URL {
+    documentURL.deletingLastPathComponent().appendingPathComponent("review.patch.json")
+  }
+
+  /// The app is the only writer of these paths: anything already there is unsafe output.
+  private func writeOutput(_ data: Data, to url: URL) throws {
+    // `attributesOfItem` reports a dangling symlink without following it.
+    guard (try? fileManager.attributesOfItem(atPath: url.path)) == nil else {
+      throw ReviewGenerationServiceError.unsafeOutput(relativePath)
+    }
+    try writePrivate(data, to: url)
+    guard fileManager.fileExists(atPath: url.path) else {
+      throw ReviewGenerationServiceError.outputMissing(relativePath)
+    }
+    do {
+      _ = try SecurePathContainment.requireExisting(url, inside: workspace)
+      let values = try url.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey])
+      guard values.isRegularFile == true, values.isSymbolicLink != true else {
+        throw ReviewGenerationServiceError.unsafeOutput(relativePath)
+      }
+    } catch let error as ReviewGenerationServiceError {
+      throw error
+    } catch {
+      throw ReviewGenerationServiceError.unsafeOutput(relativePath)
     }
   }
 

@@ -206,6 +206,9 @@ enum Gate0ATests {
       environment["DISABLE_AUTOUPDATER"] == "1"
         && environment["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"] == "1",
       "child could update itself or send nonessential traffic")
+    try expect(
+      environment["CLAUDE_CODE_MAX_OUTPUT_TOKENS"] == "128000",
+      "a full presentation could be cut off at the default output cap")
   }
 
   private static func testFraming() throws {
