@@ -658,9 +658,19 @@ private struct ReviewGenerationView: View {
         }
         Spacer()
         Menu("Versions") {
-          ForEach(controller.generations, id: \.id) { generation in
-            Button(generation.label) { controller.select(generation) }
-              .disabled(!generation.isSelectable)
+          let selected = controller.selectedVersionID
+          // Newest first; numbers follow creation order so a version keeps its name.
+          ForEach(Array(controller.generations.enumerated().reversed()), id: \.element.id) {
+            number, generation in
+            Button { controller.select(generation) } label: {
+              let title = versionTitle(generation, number: number + 1)
+              if generation.reviewVersionID != nil, generation.reviewVersionID == selected {
+                Label(title, systemImage: "checkmark")
+              } else {
+                Text(title)
+              }
+            }
+            .disabled(!generation.isSelectable)
           }
         }.disabled(controller.generations.isEmpty)
       }.padding(10)
@@ -680,6 +690,12 @@ private struct ReviewGenerationView: View {
     .accessibilityLabel("Review reader")
   }
 
+  private func versionTitle(_ generation: ReviewGenerationRecord, number: Int) -> String {
+    let created = generation.createdAt.formatted(
+      .dateTime.month(.abbreviated).day().hour().minute())
+    let title = "Version \(number) · \(created)"
+    return generation.isSelectable ? title : "\(title) · \(generation.label)"
+  }
 }
 
 private struct ReviewHTMLPreview: View {

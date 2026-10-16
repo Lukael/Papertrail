@@ -96,6 +96,8 @@ final class ReviewGenerationController: ObservableObject {
     return (try? location.resolve()) == nil ? nil : location
   }
 
+  var selectedVersionID: UUID? { (try? store.paper(id: paperID))?.selectedReviewVersionID }
+
   /// Verified excerpts of the selected review, read from its rendered document.
   func selectedEvidence() -> [ReviewEvidenceAnchor] {
     guard let indexURL = try? selectedReviewLocation?.resolve().indexURL,
