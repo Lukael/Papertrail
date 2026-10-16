@@ -229,6 +229,8 @@ public struct AgentCapabilityChecker: Sendable {
     result["NO_COLOR"] = "1"
     result["DISABLE_AUTOUPDATER"] = "1"
     result["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"] = "1"
+    // A whole presentation is one response; Claude Code lowers this to the model's cap.
+    result["CLAUDE_CODE_MAX_OUTPUT_TOKENS"] = "128000"
     return result
   }
 }

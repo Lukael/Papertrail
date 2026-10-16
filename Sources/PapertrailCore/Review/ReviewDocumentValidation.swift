@@ -17,7 +17,7 @@ public struct ReviewDocumentDecoder: Sendable {
 
   public init() {}
 
-  public func decode(_ data: Data) throws -> ReviewDocumentV1 {
+  public func decode(_ data: Data) throws -> ReviewDocumentV2 {
     guard data.count <= Self.maximumDocumentBytes else {
       throw ReviewDocumentDecodingError.documentTooLarge(
         actual: data.count, maximum: Self.maximumDocumentBytes)
@@ -35,13 +35,39 @@ public struct ReviewDocumentDecoder: Sendable {
     try StrictReviewJSONShape.validateRoot(object)
 
     do {
-      let document = try JSONDecoder().decode(ReviewDocumentV1.self, from: data)
-      guard document.schemaVersion == 1 else {
+      let document = try JSONDecoder().decode(ReviewDocumentV2.self, from: data)
+      guard document.schemaVersion == 2 else {
         throw ReviewDocumentDecodingError.unsupportedSchemaVersion(document.schemaVersion)
       }
       return document
     } catch let error as ReviewDocumentDecodingError {
       throw error
+    } catch {
+      throw ReviewDocumentDecodingError.codableFailure(String(describing: error))
+    }
+  }
+}
+
+extension ReviewDocumentDecoder {
+  /// Whether returned JSON is a whole document rather than a correction patch.
+  public static func isWholeDocument(_ data: Data) -> Bool {
+    ((try? JSONSerialization.jsonObject(with: data)) as? [String: Any])?["schemaVersion"] != nil
+  }
+
+  public func decodePatch(_ data: Data) throws -> ReviewDocumentPatch {
+    guard data.count <= Self.maximumDocumentBytes else {
+      throw ReviewDocumentDecodingError.documentTooLarge(
+        actual: data.count, maximum: Self.maximumDocumentBytes)
+    }
+    let object: Any
+    do {
+      object = try JSONSerialization.jsonObject(with: data)
+    } catch {
+      throw ReviewDocumentDecodingError.invalidJSON
+    }
+    try StrictReviewJSONShape.validatePatch(object)
+    do {
+      return try JSONDecoder().decode(ReviewDocumentPatch.self, from: data)
     } catch {
       throw ReviewDocumentDecodingError.codableFailure(String(describing: error))
     }
@@ -84,40 +110,64 @@ public struct ReviewDocumentValidator: Sendable {
   public init() {}
 
   public func validate(
-    _ document: ReviewDocumentV1, pageTexts: [String],
+    _ document: ReviewDocumentV2, pageTexts: [String],
     conversationMessageIDs: Set<String>? = nil
   ) -> StructuredReviewValidationReport {
     var collector = FindingCollector()
-    collector.require(document.schemaVersion == 1, "schema-version", "schemaVersion", "Schema version must be 1")
+    collector.require(document.schemaVersion == 2, "schema-version", "schemaVersion", "Schema version must be 2")
     collector.prose(document.title, at: "title", maximumBytes: 1024)
-
-    let statements = statementRecords(document)
-    let steps = document.method.pipeline.enumerated().map { index, value in
-      ClaimRecord(
-        id: value.id, path: "method.pipeline[\(index)]", evidenceIDs: value.evidenceIDs,
-        prose: [("input", value.input), ("process", value.process), ("output", value.output)],
-        evidenceRequired: true)
-    }
-    let experiments = experimentRecords(document)
-    let concerns = concernRecords(document)
-    let claims = statements + steps + experiments + concerns
-
-    collector.require(!document.method.pipeline.isEmpty, "pipeline-empty", "method.pipeline", "At least one method step is required")
-    collector.maximum(document.method.pipeline.count, 32, at: "method.pipeline")
-    collector.maximum(document.method.assumptions.count, 32, at: "method.assumptions")
-    collector.require(!document.contributions.isEmpty, "contributions-empty", "contributions", "At least one contribution is required")
-    collector.maximum(document.contributions.count, 32, at: "contributions")
-    collector.maximum(document.followUpQuestions.count, 32, at: "followUpQuestions")
+    collector.require(!document.slides.isEmpty, "slides-empty", "slides", "At least one slide is required")
+    collector.maximum(document.slides.count, 40, at: "slides")
     collector.maximum(document.evidence.count, 256, at: "evidence")
+
+    var claims: [ClaimRecord] = []
+    for (index, slide) in document.slides.enumerated() {
+      let path = "slides[\(index)]"
+      collector.identifier(slide.id, at: "\(path).id")
+      collector.prose(slide.title, at: "\(path).title", maximumBytes: 1024)
+      collector.prose(slide.script, at: "\(path).script")
+      collector.require(!slide.points.isEmpty, "points-empty", "\(path).points", "A slide needs at least one point")
+      collector.maximum(slide.points.count, 8, at: "\(path).points")
+      collector.maximum(slide.figures.count, 6, at: "\(path).figures")
+      collector.maximum(slide.equations.count, 4, at: "\(path).equations")
+      collector.maximum(slide.qa.count, 6, at: "\(path).qa")
+      for (qaIndex, item) in slide.qa.enumerated() {
+        collector.prose(item.question, at: "\(path).qa[\(qaIndex)].question")
+        collector.prose(item.answer, at: "\(path).qa[\(qaIndex)].answer")
+      }
+      claims += slide.points.enumerated().map {
+        ClaimRecord(
+          $0.element, path: "\(path).points[\($0.offset)]", evidenceRequired: slide.kind == .paper)
+      }
+      claims += slide.figures.enumerated().map { offset, figure in
+        ClaimRecord(
+          id: figure.id, path: "\(path).figures[\(offset)]", evidenceIDs: figure.evidenceIDs,
+          prose: [("label", figure.label), ("description", figure.description)],
+          evidenceRequired: true)
+      }
+      for (offset, equation) in slide.equations.enumerated() {
+        let equationPath = "\(path).equations[\(offset)]"
+        collector.latex(equation.latex, at: "\(equationPath).latex", maximumBytes: 2048)
+        collector.maximum(equation.variables.count, 16, at: "\(equationPath).variables")
+        for (variableIndex, variable) in equation.variables.enumerated() {
+          let variablePath = "\(equationPath).variables[\(variableIndex)]"
+          collector.latex(variable.symbol, at: "\(variablePath).symbol", maximumBytes: 256)
+          collector.prose(variable.meaning, at: "\(variablePath).meaning")
+        }
+        claims.append(
+          ClaimRecord(
+            id: equation.id, path: equationPath, evidenceIDs: equation.evidenceIDs,
+            prose: [("label", equation.label), ("meaning", equation.meaning)],
+            evidenceRequired: true))
+      }
+    }
+    collector.unique(document.slides.map(\.id), namespace: "slide")
+    collector.require(
+      document.slides.contains { $0.kind == .paper }, "paper-slide-required", "slides",
+      "At least one paper slide is required")
 
     let discussion = document.discussion ?? []
     collector.maximum(discussion.count, 64, at: "discussion")
-    if let conversationMessageIDs {
-      collector.require(
-        conversationMessageIDs.isEmpty || !discussion.isEmpty,
-        "discussion-required", "discussion",
-        "Discussion is required when the conversation contains messages")
-    }
     for (index, note) in discussion.enumerated() {
       let path = "discussion[\(index)]"
       collector.prose(note.text, at: "\(path).text")
@@ -138,28 +188,6 @@ public struct ReviewDocumentValidator: Sendable {
       }
     }
 
-    switch document.experiments {
-    case .reported(let items):
-      collector.require(!items.isEmpty, "reported-empty", "experiments.items", "Reported experiments must not be empty")
-      collector.maximum(items.count, 64, at: "experiments.items")
-    case .notReported(let note):
-      collector.prose(note, at: "experiments.note")
-    }
-    switch document.authorLimitations {
-    case .reported(let items):
-      collector.require(!items.isEmpty, "reported-empty", "authorLimitations.items", "Reported limitations must not be empty")
-      collector.maximum(items.count, 32, at: "authorLimitations.items")
-    case .notReported(let note):
-      collector.prose(note, at: "authorLimitations.note")
-    }
-    switch document.reviewerConcerns {
-    case .reported(let items):
-      collector.require(!items.isEmpty, "reported-empty", "reviewerConcerns.items", "Reported concerns must not be empty")
-      collector.maximum(items.count, 32, at: "reviewerConcerns.items")
-    case .noSupportedConcern(let note):
-      collector.prose(note, at: "reviewerConcerns.note")
-    }
-
     for record in claims {
       collector.identifier(record.id, at: "\(record.path).id")
       collector.maximum(record.evidenceIDs.count, 16, at: "\(record.path).evidenceIDs")
@@ -168,9 +196,6 @@ public struct ReviewDocumentValidator: Sendable {
         !record.evidenceRequired || !record.evidenceIDs.isEmpty,
         "evidence-required", "\(record.path).evidenceIDs", "This claim requires evidence")
       for (field, value) in record.prose { collector.prose(value, at: "\(record.path).\(field)") }
-    }
-    for (index, question) in document.followUpQuestions.enumerated() {
-      collector.prose(question, at: "followUpQuestions[\(index)]")
     }
 
     let claimIDs = claims.map(\.id)
@@ -218,22 +243,18 @@ public struct ReviewDocumentValidator: Sendable {
       }
     }
 
-    collector.require(
-      document.contributions.contains { contribution in
-        contribution.evidenceIDs.contains { id in
-          guard let evidenceClass = evidenceByID[id]?.class else { return false }
-          return evidenceClass == .authorStatement || evidenceClass == .directEvidence
-        }
-      },
-      "unsupported-contributions", "contributions",
-      "At least one contribution requires author-statement or direct evidence")
-    collector.require(
-      document.strongestSupportedConclusion.evidenceIDs.contains { id in
-        guard let evidenceClass = evidenceByID[id]?.class else { return false }
-        return evidenceClass == .authorStatement || evidenceClass == .directEvidence
-      },
-      "unsupported-conclusion", "strongestSupportedConclusion",
-      "Strongest conclusion requires author-statement or direct evidence")
+    // A paper slide may not rest only on interpretation or unresolved passages.
+    for (index, slide) in document.slides.enumerated() where slide.kind == .paper {
+      collector.require(
+        slide.points.contains { point in
+          point.evidenceIDs.contains { id in
+            guard let evidenceClass = evidenceByID[id]?.class else { return false }
+            return evidenceClass == .authorStatement || evidenceClass == .directEvidence
+          }
+        },
+        "unsupported-slide", "slides[\(index)].points",
+        "A paper slide requires at least one point with author-statement or direct evidence")
+    }
 
     return StructuredReviewValidationReport(
       validatorVersion: Self.validatorVersion,
@@ -241,7 +262,7 @@ public struct ReviewDocumentValidator: Sendable {
   }
 
   public func validateOrThrow(
-    _ document: ReviewDocumentV1, pageTexts: [String],
+    _ document: ReviewDocumentV2, pageTexts: [String],
     conversationMessageIDs: Set<String>? = nil
   ) throws {
     let report = validate(
@@ -249,11 +270,14 @@ public struct ReviewDocumentValidator: Sendable {
     guard report.passed else { throw ReviewDocumentValidationError(report: report) }
   }
 
+  /// Compares excerpts the way a reader would: whitespace runs, ligatures (NFKC), soft hyphens,
+  /// and hyphens between letters, including PDF line-end breaks such as "fol-\nlowed", are ignored.
   public static func normalizeEvidenceText(_ text: String) -> String {
     let lineNormalized = text
       .replacingOccurrences(of: "\r\n", with: "\n")
       .replacingOccurrences(of: "\r", with: "\n")
-      .precomposedStringWithCanonicalMapping
+      .replacingOccurrences(of: "\u{00AD}", with: "")
+      .precomposedStringWithCompatibilityMapping
     var result = ""
     var inWhitespace = false
     for scalar in lineNormalized.unicodeScalars {
@@ -265,50 +289,13 @@ public struct ReviewDocumentValidator: Sendable {
         inWhitespace = false
       }
     }
-    return result
+    return result.replacingOccurrences(
+      of: #"(?<=\p{L})[-\x{2010}\x{2011}] ?(?=\p{L})"#, with: "", options: .regularExpression)
   }
 
   private static func isCanonicalLowercaseUUID(_ value: String) -> Bool {
     guard let uuid = UUID(uuidString: value) else { return false }
     return uuid.uuidString.lowercased() == value
-  }
-
-  private func statementRecords(_ document: ReviewDocumentV1) -> [ClaimRecord] {
-    var records = [
-      ClaimRecord(document.summary, path: "summary"),
-      ClaimRecord(document.researchProblem, path: "researchProblem"),
-      ClaimRecord(document.method.overview, path: "method.overview"),
-      ClaimRecord(document.strongestSupportedConclusion, path: "strongestSupportedConclusion"),
-    ]
-    records += document.method.assumptions.enumerated().map { ClaimRecord($0.element, path: "method.assumptions[\($0.offset)]") }
-    records += document.contributions.enumerated().map { ClaimRecord($0.element, path: "contributions[\($0.offset)]") }
-    if case .reported(let items) = document.authorLimitations {
-      records += items.enumerated().map { ClaimRecord($0.element, path: "authorLimitations.items[\($0.offset)]") }
-    }
-    return records
-  }
-
-  private func experimentRecords(_ document: ReviewDocumentV1) -> [ClaimRecord] {
-    guard case .reported(let items) = document.experiments else { return [] }
-    return items.enumerated().map { index, value in
-      ClaimRecord(
-        id: value.id, path: "experiments.items[\(index)]", evidenceIDs: value.evidenceIDs,
-        prose: [("condition", value.condition), ("metric", value.metric), ("result", value.result)],
-        evidenceRequired: true)
-    }
-  }
-
-  private func concernRecords(_ document: ReviewDocumentV1) -> [ClaimRecord] {
-    guard case .reported(let items) = document.reviewerConcerns else { return [] }
-    return items.enumerated().map { index, value in
-      ClaimRecord(
-        id: value.id, path: "reviewerConcerns.items[\(index)]", evidenceIDs: value.evidenceIDs,
-        prose: [
-          ("affectedClaim", value.affectedClaim), ("concern", value.concern),
-          ("whyItMatters", value.whyItMatters), ("unresolved", value.unresolved),
-          ("resolvingCheck", value.resolvingCheck),
-        ], evidenceRequired: false)
-    }
   }
 }
 
@@ -319,12 +306,12 @@ private struct ClaimRecord {
   let prose: [(String, String)]
   let evidenceRequired: Bool
 
-  init(_ statement: EvidenceLinkedStatement, path: String) {
+  init(_ statement: EvidenceLinkedStatement, path: String, evidenceRequired: Bool) {
     id = statement.id
     self.path = path
     evidenceIDs = statement.evidenceIDs
     prose = [("text", statement.text)]
-    evidenceRequired = true
+    self.evidenceRequired = evidenceRequired
   }
 
   init(
@@ -367,6 +354,14 @@ private struct FindingCollector {
     require(!containsUnsafeContent(value), "unsafe-content", path, "Markup, remote URLs, and absolute paths are forbidden")
   }
 
+  /// LaTeX is never placed in the page as markup (it is rendered to MathML or escaped), so only
+  /// size and control characters are checked; `<` and `>` are ordinary math.
+  mutating func latex(_ value: String, at path: String, maximumBytes: Int) {
+    require(!value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, "empty-prose", path, "Value must not be empty")
+    require(value.utf8.count <= maximumBytes, "prose-too-large", path, "Maximum UTF-8 size is \(maximumBytes) bytes")
+    require(!containsForbiddenControl(value), "control-character", path, "Value contains a forbidden control character")
+  }
+
   mutating func unique(_ values: [String], namespace: String) {
     var seen = Set<String>()
     for value in values where !seen.insert(value).inserted {
@@ -403,31 +398,46 @@ private struct FindingCollector {
 
 private enum StrictReviewJSONShape {
   static func validateRoot(_ value: Any) throws {
-    let root = try object(value, at: "$", keys: [
-      "schemaVersion", "title", "summary", "researchProblem", "method", "contributions",
-      "experiments", "authorLimitations", "reviewerConcerns",
-      "strongestSupportedConclusion", "followUpQuestions", "evidence", "discussion",
-    ], optional: ["discussion"])
+    let root = try object(
+      value, at: "$", keys: ["schemaVersion", "title", "slides", "evidence", "discussion"],
+      optional: ["discussion"])
     try scalar(root["schemaVersion"], at: "$.schemaVersion", as: NSNumber.self)
     try scalar(root["title"], at: "$.title", as: String.self)
-    try statement(root["summary"], "$.summary")
-    try statement(root["researchProblem"], "$.researchProblem")
-    let method = try object(root["method"], at: "$.method", keys: ["overview", "pipeline", "assumptions"])
-    try statement(method["overview"], "$.method.overview")
-    try array(method["pipeline"], at: "$.method.pipeline", each: methodStep)
-    try array(method["assumptions"], at: "$.method.assumptions", each: statement)
-    try array(root["contributions"], at: "$.contributions", each: statement)
-    try tagged(root["experiments"], at: "$.experiments", item: experiment, absentStatus: "notReported")
-    try tagged(root["authorLimitations"], at: "$.authorLimitations", item: statement, absentStatus: "notReported")
-    try tagged(root["reviewerConcerns"], at: "$.reviewerConcerns", item: concern, absentStatus: "noSupportedConcern")
-    try statement(root["strongestSupportedConclusion"], "$.strongestSupportedConclusion")
-    try array(root["followUpQuestions"], at: "$.followUpQuestions") { value, path in
-      try scalar(value, at: path, as: String.self)
-    }
+    try array(root["slides"], at: "$.slides", each: slide)
     try array(root["evidence"], at: "$.evidence", each: evidence)
     if root["discussion"] != nil {
       try array(root["discussion"], at: "$.discussion", each: discussionNote)
     }
+  }
+
+  static func validatePatch(_ value: Any) throws {
+    let root = try object(value, at: "$", keys: ["replace", "remove"], optional: ["replace", "remove"])
+    if let replace = root["replace"] {
+      let keys: Set<String> = ["evidence", "points", "figures", "equations"]
+      let item = try object(replace, at: "$.replace", keys: keys, optional: keys)
+      if item["evidence"] != nil { try array(item["evidence"], at: "$.replace.evidence", each: evidence) }
+      if item["points"] != nil { try array(item["points"], at: "$.replace.points", each: statement) }
+      if item["figures"] != nil { try array(item["figures"], at: "$.replace.figures", each: figure) }
+      if item["equations"] != nil {
+        try array(item["equations"], at: "$.replace.equations", each: equation)
+      }
+    }
+    if let remove = root["remove"] {
+      let keys: Set<String> = ["evidence", "points", "figures", "equations", "slides"]
+      let item = try object(remove, at: "$.remove", keys: keys, optional: keys)
+      for key in keys.sorted() where item[key] != nil { try strings(item[key], "$.remove.\(key)") }
+    }
+  }
+
+  private static func slide(_ value: Any?, _ path: String) throws {
+    let item = try object(
+      value, at: path,
+      keys: ["id", "kind", "title", "points", "figures", "equations", "script", "qa"])
+    for key in ["id", "kind", "title", "script"] { try string(item[key], "\(path).\(key)") }
+    try array(item["points"], at: "\(path).points", each: statement)
+    try array(item["figures"], at: "\(path).figures", each: figure)
+    try array(item["equations"], at: "\(path).equations", each: equation)
+    try array(item["qa"], at: "\(path).qa", each: question)
   }
 
   private static func statement(_ value: Any?, _ path: String) throws {
@@ -437,23 +447,28 @@ private enum StrictReviewJSONShape {
     try strings(item["evidenceIDs"], "\(path).evidenceIDs")
   }
 
-  private static func methodStep(_ value: Any?, _ path: String) throws {
-    let item = try object(value, at: path, keys: ["id", "input", "process", "output", "evidenceIDs"])
-    for key in ["id", "input", "process", "output"] { try string(item[key], "\(path).\(key)") }
+  private static func figure(_ value: Any?, _ path: String) throws {
+    let item = try object(value, at: path, keys: ["id", "label", "description", "evidenceIDs"])
+    for key in ["id", "label", "description"] { try string(item[key], "\(path).\(key)") }
     try strings(item["evidenceIDs"], "\(path).evidenceIDs")
   }
 
-  private static func experiment(_ value: Any?, _ path: String) throws {
-    let item = try object(value, at: path, keys: ["id", "condition", "metric", "result", "evidenceIDs"])
-    for key in ["id", "condition", "metric", "result"] { try string(item[key], "\(path).\(key)") }
+  private static func equation(_ value: Any?, _ path: String) throws {
+    let item = try object(
+      value, at: path, keys: ["id", "label", "latex", "meaning", "variables", "evidenceIDs"])
+    for key in ["id", "label", "latex", "meaning"] { try string(item[key], "\(path).\(key)") }
+    try array(item["variables"], at: "\(path).variables") { value, variablePath in
+      let variable = try object(value, at: variablePath, keys: ["symbol", "meaning"])
+      try string(variable["symbol"], "\(variablePath).symbol")
+      try string(variable["meaning"], "\(variablePath).meaning")
+    }
     try strings(item["evidenceIDs"], "\(path).evidenceIDs")
   }
 
-  private static func concern(_ value: Any?, _ path: String) throws {
-    let proseKeys = ["id", "affectedClaim", "concern", "whyItMatters", "unresolved", "resolvingCheck"]
-    let item = try object(value, at: path, keys: Set(proseKeys + ["evidenceIDs"]))
-    for key in proseKeys { try string(item[key], "\(path).\(key)") }
-    try strings(item["evidenceIDs"], "\(path).evidenceIDs")
+  private static func question(_ value: Any?, _ path: String) throws {
+    let item = try object(value, at: path, keys: ["question", "answer"])
+    try string(item["question"], "\(path).question")
+    try string(item["answer"], "\(path).answer")
   }
 
   private static func evidence(_ value: Any?, _ path: String) throws {
@@ -471,24 +486,6 @@ private enum StrictReviewJSONShape {
     try string(item["kind"], "\(path).kind")
     try string(item["text"], "\(path).text")
     try strings(item["messageIDs"], "\(path).messageIDs")
-  }
-
-  private static func tagged(
-    _ value: Any?, at path: String, item: (Any?, String) throws -> Void,
-    absentStatus: String
-  ) throws {
-    guard let raw = value as? [String: Any], let status = raw["status"] as? String else {
-      throw ReviewDocumentDecodingError.wrongType(path: path, expected: "tagged object")
-    }
-    if status == "reported" {
-      let object = try object(raw, at: path, keys: ["status", "items"])
-      try array(object["items"], at: "\(path).items", each: item)
-    } else if status == absentStatus {
-      let object = try object(raw, at: path, keys: ["status", "note"])
-      try string(object["note"], "\(path).note")
-    } else {
-      throw ReviewDocumentDecodingError.invalidTaggedUnion(path: path)
-    }
   }
 
   private static func object(

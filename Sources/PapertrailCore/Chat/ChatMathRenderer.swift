@@ -23,8 +23,9 @@ public enum ChatMathRendererError: Error, LocalizedError {
 
 /// Converts app-owned chat text to a self-contained HTML document containing MathML.
 /// KaTeX runs locally during document construction; the resulting web view needs no scripts.
-@MainActor
-public final class ChatMathRenderer {
+/// One lock serializes the JavaScript context, so chat (main thread) and review generation
+/// (background) can share the instance.
+public final class ChatMathRenderer: @unchecked Sendable {
   public static let shared: Result<ChatMathRenderer, Error> = Result {
     try ChatMathRenderer()
   }
@@ -37,6 +38,7 @@ public final class ChatMathRenderer {
   private static let maximumSourceBytes = 16 * 1024
   private static let maximumCacheEntries = 128
 
+  private let lock = NSLock()
   private let context: JSContext
   private let renderToString: JSValue
   private var cache: [CacheKey: String] = [:]
@@ -90,7 +92,16 @@ public final class ChatMathRenderer {
     )
   }
 
+  /// MathML for one LaTeX expression, or the escaped source when KaTeX cannot render it.
+  public func mathML(_ source: String, display: Bool) -> String {
+    lock.withLock { render(source: source, display: display) }
+  }
+
   public func html(for text: String) -> String {
+    lock.withLock { unlockedHTML(for: text) }
+  }
+
+  private func unlockedHTML(for text: String) -> String {
     let body = ChatMarkdownTable.blocks(in: text).map { block in
       switch block {
       case .text(let value):

@@ -40,6 +40,7 @@
 - Allow paper-only generation when no completed chat exists.
 - In generated documents, visually and semantically distinguish claims supported by verified paper evidence from discussion questions, interpretations, hypotheses, and open questions; each discussion item retains links to its source message IDs.
 - Treat structured JSON as a validated generation boundary and let the app render the accepted data into local static HTML; users interact with the rendered document rather than raw JSON.
+- Generate the document as a journal-club presentation of about fifteen slides grounded only in the paper: each slide shows its title and short evidence-linked points, while the speaker script, figure and table notes, and expected questions stay collapsed. Figures are referenced by label and caption evidence, so a page link focuses the PDF instead of embedding images.
 - Keep Chat visible while the user shows Paper, Review, or both in the source area; when both are visible, their nested split divider and the main chat divider are the primary width controls.
 - Let Review content occupy the full available pane height in Paper-only, Review-only, and split modes; the WebView grows and scrolls inside that area instead of collapsing below the toolbar.
 - Separate authored questions from generated answers by alignment, shape, and identity—not color alone.
