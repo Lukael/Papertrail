@@ -26,6 +26,7 @@ struct RestrictedReviewWebView: NSViewRepresentable {
       webView: webView, location: location, reloadToken: reloadToken,
       onExternalLinkRequested: onExternalLinkRequested,
       onLoadStateChanged: onLoadStateChanged)
+    connectEvidenceLinks(context)
     return webView
   }
 
@@ -34,6 +35,15 @@ struct RestrictedReviewWebView: NSViewRepresentable {
       location: location, reloadToken: reloadToken,
       onExternalLinkRequested: onExternalLinkRequested,
       onLoadStateChanged: onLoadStateChanged)
+    connectEvidenceLinks(context)
+  }
+
+  /// Evidence links still scroll the review; the workspace also focuses the PDF.
+  private func connectEvidenceLinks(_ context: Context) {
+    let openURL = context.environment.openURL
+    context.coordinator.webCoordinator.navigationDelegate.onEvidenceActivated = { id in
+      openURL(PaperSourceLink.evidence(id).url)
+    }
   }
 
   @MainActor

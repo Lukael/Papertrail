@@ -468,7 +468,10 @@ struct PaperWorkspaceView: View {
   @ObservedObject var chatController: PaperChatController
   @State private var showsPaper = true
   @State private var showsReview = false
+  @State private var pdfFocus: PDFFocusRequest?
+  @State private var evidence: [ReviewEvidenceAnchor] = []
   @AppStorage("pdfDarkMode") private var pdfDarkMode = false
+  @AppStorage("pdfEvidenceHighlights") private var showsEvidenceHighlights = true
 
   private var chatView: some View {
     PaperChatView(controller: chatController)
@@ -491,6 +494,15 @@ struct PaperWorkspaceView: View {
     }
     .accessibilityElement(children: .contain)
     .accessibilityLabel("Resizable paper and chat workspace")
+    // Page citations in chat and evidence links in the review focus the PDF.
+    .environment(\.openURL, OpenURLAction { url in
+      guard let link = PaperSourceLink(url: url) else { return .systemAction }
+      focusPaper(on: link)
+      return .handled
+    })
+    .task(id: reviewController.selectedReviewLocation?.versionID) {
+      evidence = reviewController.selectedEvidence()
+    }
     .navigationTitle(paper.title)
     .onAppear {
       controller.record(level: .debug, "Opened paper workspace: \(paper.title)")
@@ -524,6 +536,14 @@ struct PaperWorkspaceView: View {
         .toggleStyle(.button)
         .help("Turn PDF dark mode on or off")
         .accessibilityLabel("PDF dark mode")
+        if !evidence.isEmpty {
+          Toggle(isOn: $showsEvidenceHighlights) {
+            Label("Evidence", systemImage: "highlighter")
+          }
+          .toggleStyle(.button)
+          .help("Highlight the review's verified evidence in the PDF")
+          .accessibilityLabel("Evidence highlights")
+        }
       }
     }
     .padding(.horizontal, 14).padding(.vertical, 10)
@@ -568,10 +588,15 @@ struct PaperWorkspaceView: View {
   @ViewBuilder private var paperPane: some View {
     if let url = try? controller.sourceURL(for: paper) {
       PDFDocumentView(
-        url: url, pageIndex: paper.pageIndex, scale: paper.scale, isDarkMode: pdfDarkMode
-      ) { page, scale in
-        controller.updateReadingState(paperID: paper.id, pageIndex: page, scale: scale)
-      }
+        url: url, pageIndex: paper.pageIndex, scale: paper.scale, isDarkMode: pdfDarkMode,
+        onReadingStateChanged: { page, scale in
+          controller.updateReadingState(paperID: paper.id, pageIndex: page, scale: scale)
+        },
+        focus: pdfFocus,
+        highlights: showsEvidenceHighlights
+          ? evidence.map { PDFTextAnchor(pageIndex: $0.pageIndex - 1, text: $0.excerpt) } : [],
+        onSelectionAction: sendSelection
+      )
       .accessibilityIdentifier("pdf-reader")
     } else {
       ContentUnavailableView {
@@ -583,6 +608,37 @@ struct PaperWorkspaceView: View {
           NSWorkspace.shared.activateFileViewerSelecting([controller.paths.paper(paper.id)])
         }
       }
+    }
+  }
+
+  private func focusPaper(on link: PaperSourceLink) {
+    switch link {
+    case .page(let page):
+      pdfFocus = PDFFocusRequest(pageIndex: page - 1)
+    case .evidence(let id):
+      guard let anchor = evidence.first(where: { $0.id == id }) else { return }
+      pdfFocus = PDFFocusRequest(pageIndex: anchor.pageIndex - 1, text: anchor.excerpt)
+    }
+    showsPaper = true
+  }
+
+  private func sendSelection(_ action: PDFSelectionAction, text: String, page: Int) {
+    let quote = "> " + text.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+    let request: String
+    switch action {
+    case .explain: request = "위 부분을 논문 맥락에서 설명해줘."
+    case .translate: request = "위 부분을 한국어로 번역해줘."
+    case .ask: request = ""
+    }
+    let message = "\(quote)\n\n[p. \(page)] \(request)"
+    let draft = chatController.input
+    chatController.input = message
+    if action != .ask { chatController.send() }
+    // Never drop an unsent draft: restore it after a send, or keep both when not sent.
+    if chatController.input.isEmpty {
+      chatController.input = draft
+    } else if !draft.isEmpty {
+      chatController.input = draft + "\n\n" + message
     }
   }
 }
@@ -623,6 +679,7 @@ private struct ReviewGenerationView: View {
     .accessibilityElement(children: .contain)
     .accessibilityLabel("Review reader")
   }
+
 }
 
 private struct ReviewHTMLPreview: View {
@@ -1274,7 +1331,17 @@ private struct ChatComposerField: NSViewRepresentable {
   func updateNSView(_ field: NSTextField, context: Context) {
     context.coordinator.parent = self
     field.isEnabled = context.environment.isEnabled
-    if field.stringValue != text { field.stringValue = text }
+    if field.stringValue != text {
+      field.stringValue = text
+      // Text set from outside, such as a quoted PDF selection, is ready to edit at its end.
+      if !text.isEmpty {
+        DispatchQueue.main.async {
+          guard field.window?.makeFirstResponder(field) == true else { return }
+          field.currentEditor()?.selectedRange = NSRange(
+            location: (field.stringValue as NSString).length, length: 0)
+        }
+      }
+    }
     field.invalidateIntrinsicContentSize()
   }
 

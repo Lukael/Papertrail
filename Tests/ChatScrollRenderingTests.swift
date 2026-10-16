@@ -44,6 +44,10 @@ struct ChatLiveAssistantState { var reasoning: String?; var response: String? }
       verifyRailLayout()
       return
     }
+    if CommandLine.arguments.contains("--citation") {
+      verifyCitationLink()
+      return
+    }
     let controller = PaperChatController()
     let count = Int(CommandLine.arguments.dropFirst().first ?? "60")!
     let isMath = CommandLine.arguments.contains("--math")
@@ -198,8 +202,44 @@ struct ChatLiveAssistantState { var reasoning: String?; var response: String? }
     RunLoop.current.run(until: Date().addingTimeInterval(0.1))
     precondition(controller.input == nextDraft && input.isEnabled,
       "Completing a request must preserve the next draft")
+    window.makeFirstResponder(nil)
+    controller.input = "> quoted selection\n\n[p. 2] "
+    RunLoop.current.run(until: Date().addingTimeInterval(0.2))
+    precondition(
+      (window.firstResponder as? NSTextView)?.selectedRange()
+        == NSRange(location: (controller.input as NSString).length, length: 0),
+      "An externally inserted draft must focus the composer with the caret at its end")
     window.orderOut(nil)
     print("PASS: composer with \(messageCount) messages preserves editing, draft, IME Return, and duplicate-send protection")
+  }
+
+  /// A rendered [p. N] citation reaches the workspace through the openURL environment.
+  static func verifyCitationLink() {
+    var opened: URL?
+    let view = ChatMessageContentView(text: "결과는 [p. 4]에 보고된다.")
+      .environment(\.openURL, OpenURLAction { url in
+        opened = url
+        return .handled
+      })
+    let window = NSWindow(contentRect: NSRect(x: 100, y: 100, width: 500, height: 200),
+      styleMask: [.titled], backing: .buffered, defer: false)
+    window.contentView = NSHostingView(rootView: view)
+    window.orderFront(nil)
+    func webView(in view: NSView) -> WKWebView? {
+      if let web = view as? WKWebView { return web }
+      return view.subviews.compactMap { webView(in: $0) }.first
+    }
+    let deadline = Date().addingTimeInterval(5)
+    while Date() < deadline, opened == nil {
+      // App-owned click on the rendered link; page scripts stay disabled.
+      webView(in: window.contentView!)?.evaluateJavaScript(
+        "document.querySelector('a[href^=\"papertrail-page:\"]')?.click()")
+      RunLoop.current.run(until: Date().addingTimeInterval(0.2))
+    }
+    precondition(opened?.absoluteString == "papertrail-page:4",
+      "Citation link did not open papertrail-page:4: \(String(describing: opened))")
+    window.orderOut(nil)
+    print("PASS: [p. N] citation link opens the paper page through openURL")
   }
 
   static func verifyRailLayout() {

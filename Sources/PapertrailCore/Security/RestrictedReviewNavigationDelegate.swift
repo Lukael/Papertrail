@@ -44,6 +44,9 @@ public final class ExternalLinkConfirmationController: ObservableObject {
 public final class RestrictedReviewNavigationDelegate: NSObject, WKNavigationDelegate, WKUIDelegate {
   public private(set) var metrics = RestrictedReviewNavigationMetrics()
   public private(set) var resolvedLocation: ResolvedReviewLocation?
+  /// Receives the evidence ID when an in-document `#evidence-…` link is clicked; the review then
+  /// stays where it is instead of scrolling to the evidence list.
+  public var onEvidenceActivated: ((String) -> Void)?
   private var location: SelectedReviewLocation
   private var policy: ReviewNavigationPolicy?
   private var onExternalLinkRequested: (URL) -> Void
@@ -119,6 +122,14 @@ public final class RestrictedReviewNavigationDelegate: NSObject, WKNavigationDel
     }
     switch policy.decision(for: url, isMainFrame: action.targetFrame?.isMainFrame == true) {
     case .allowCurrentDocumentOrFragment:
+      if action.navigationType == .linkActivated, let onEvidenceActivated,
+        let fragment = url.fragment?.removingPercentEncoding, fragment.hasPrefix("evidence-")
+      {
+        // The PDF shows the excerpt; the review keeps the reader's place on the slide.
+        onEvidenceActivated(String(fragment.dropFirst("evidence-".count)))
+        decisionHandler(.cancel)
+        return
+      }
       decisionHandler(.allow)
     case .requireExternalConfirmation(let destination):
       guard action.targetFrame?.isMainFrame == true, action.navigationType == .linkActivated else {
