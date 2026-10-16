@@ -140,7 +140,8 @@ struct PaperLibraryView: View {
           PaperWorkspaceView(
             paper: selectedPaper, controller: controller,
             reviewController: controller.reviewController(paperID: selectedPaper.id),
-            chatController: controller.chatController(paperID: selectedPaper.id)
+            chatController: controller.chatController(paperID: selectedPaper.id),
+            notes: controller.notes(paperID: selectedPaper.id)
           )
           .id(selectedPaper.id)
         } else {
@@ -466,7 +467,10 @@ struct PaperWorkspaceView: View {
   @ObservedObject var controller: PaperLibraryController
   @ObservedObject var reviewController: ReviewGenerationController
   @ObservedObject var chatController: PaperChatController
+  @ObservedObject var notes: PaperNotesModel
   @State private var showsPaper = true
+  @State private var showsNotes = false
+  @State private var noteEditor: NoteDraft?
   @State private var showsReview = false
   @State private var pdfFocus: PDFFocusRequest?
   @State private var evidence: [ReviewEvidenceAnchor] = []
@@ -474,7 +478,12 @@ struct PaperWorkspaceView: View {
   @AppStorage("pdfEvidenceHighlights") private var showsEvidenceHighlights = true
 
   private var chatView: some View {
-    PaperChatView(controller: chatController)
+    PaperChatView(
+      controller: chatController,
+      savedNoteMessageIDs: Set(notes.notes.compactMap(\.messageID)),
+      onSaveNote: { message in
+        notes.add(PaperNote(source: .chat, text: message.content, messageID: message.id))
+      })
   }
 
   var body: some View {
@@ -513,6 +522,18 @@ struct PaperWorkspaceView: View {
     .onChange(of: showsReview) {
       controller.record(level: .debug, "Review pane visibility changed to \(showsReview).")
     }
+    .sheet(item: $noteEditor) { draft in
+      NoteEditorSheet(draft: draft) { comment in
+        if let id = draft.noteID {
+          notes.setComment(comment, id: id)
+        } else if let passage = draft.passage {
+          notes.add(highlightNote(passage, comment: comment))
+        }
+        noteEditor = nil
+      } onCancel: {
+        noteEditor = nil
+      }
+    }
   }
 
   private var workspaceHeader: some View {
@@ -528,6 +549,28 @@ struct PaperWorkspaceView: View {
       }
       .toggleStyle(.button)
       .accessibilityHint("Show or hide the review pane. At least one source pane stays visible.")
+
+      Button {
+        showsNotes.toggle()
+      } label: {
+        Label("Notes (\(notes.notes.count))", systemImage: "note.text")
+      }
+      .help("Highlights and saved chat answers for this paper")
+      .popover(isPresented: $showsNotes, arrowEdge: .bottom) {
+        PaperNotesList(
+          notes: notes.notes,
+          onGoTo: { note in
+            guard let page = note.pageNumber else { return }
+            pdfFocus = PDFFocusRequest(pageIndex: page - 1, text: note.text)
+            showsPaper = true
+            showsNotes = false
+          },
+          onEdit: { note in
+            showsNotes = false
+            noteEditor = NoteDraft(noteID: note.id, passage: nil, text: note.text, comment: note.comment)
+          },
+          onDelete: { notes.remove(id: $0.id) })
+      }
       Spacer()
       if showsPaper {
         Toggle(isOn: $pdfDarkMode) {
@@ -595,7 +638,21 @@ struct PaperWorkspaceView: View {
         focus: pdfFocus,
         highlights: showsEvidenceHighlights
           ? evidence.map { PDFTextAnchor(pageIndex: $0.pageIndex - 1, text: $0.excerpt) } : [],
-        onSelectionAction: sendSelection
+        userHighlights: notes.notes.compactMap { note in
+          note.pageNumber.map {
+            PDFUserHighlight(id: note.id, pageIndex: $0 - 1, rects: note.rects, note: note.comment)
+          }
+        },
+        onSelectionAction: sendSelection,
+        onHighlightAction: { action, id in
+          switch action {
+          case .remove:
+            notes.remove(id: id)
+          case .editNote:
+            guard let note = notes.notes.first(where: { $0.id == id }) else { return }
+            noteEditor = NoteDraft(noteID: id, passage: nil, text: note.text, comment: note.comment)
+          }
+        }
       )
       .accessibilityIdentifier("pdf-reader")
     } else {
@@ -622,15 +679,28 @@ struct PaperWorkspaceView: View {
     showsPaper = true
   }
 
-  private func sendSelection(_ action: PDFSelectionAction, text: String, page: Int) {
-    let quote = "> " + text.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+  private func highlightNote(_ passage: PDFSelectedPassage, comment: String = "") -> PaperNote {
+    PaperNote(
+      source: .pdf, pageNumber: passage.pageNumber, rects: passage.rects,
+      text: passage.text.split(whereSeparator: \.isWhitespace).joined(separator: " "),
+      comment: comment)
+  }
+
+  private func sendSelection(_ action: PDFSelectionAction, passage: PDFSelectedPassage) {
+    let quote = "> " + passage.text.split(whereSeparator: \.isWhitespace).joined(separator: " ")
     let request: String
     switch action {
+    case .highlight:
+      notes.add(highlightNote(passage))
+      return
+    case .highlightWithNote:
+      noteEditor = NoteDraft(noteID: nil, passage: passage, text: passage.text, comment: "")
+      return
     case .explain: request = "위 부분을 논문 맥락에서 설명해줘."
     case .translate: request = "위 부분을 한국어로 번역해줘."
     case .ask: request = ""
     }
-    let message = "\(quote)\n\n[p. \(page)] \(request)"
+    let message = "\(quote)\n\n[p. \(passage.pageNumber)] \(request)"
     let draft = chatController.input
     chatController.input = message
     if action != .ask { chatController.send() }
@@ -640,6 +710,136 @@ struct PaperWorkspaceView: View {
     } else if !draft.isEmpty {
       chatController.input = draft + "\n\n" + message
     }
+  }
+}
+
+/// A note being written: a new highlight with a comment, or an existing note's comment.
+private struct NoteDraft: Identifiable {
+  let id = UUID()
+  let noteID: UUID?
+  let passage: PDFSelectedPassage?
+  let text: String
+  let comment: String
+}
+
+private struct NoteEditorSheet: View {
+  let draft: NoteDraft
+  let onSave: (String) -> Void
+  let onCancel: () -> Void
+  @State private var comment: String
+
+  init(draft: NoteDraft, onSave: @escaping (String) -> Void, onCancel: @escaping () -> Void) {
+    self.draft = draft
+    self.onSave = onSave
+    self.onCancel = onCancel
+    _comment = State(initialValue: draft.comment)
+  }
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 12) {
+      Text(draft.noteID == nil ? "Highlight with Note" : "Edit Note").font(.headline)
+      ScrollView {
+        Text(draft.text)
+          .font(.callout)
+          .foregroundStyle(.secondary)
+          .textSelection(.enabled)
+          .frame(maxWidth: .infinity, alignment: .leading)
+      }
+      .frame(maxHeight: 140)
+      TextEditor(text: $comment)
+        .font(.body)
+        .frame(minHeight: 120)
+        .overlay { RoundedRectangle(cornerRadius: 6).stroke(Color.secondary.opacity(0.3)) }
+        .accessibilityLabel("Note")
+      HStack {
+        Spacer()
+        Button("Cancel", role: .cancel, action: onCancel).keyboardShortcut(.cancelAction)
+        Button("Save") { onSave(comment) }
+          .buttonStyle(.borderedProminent)
+          .keyboardShortcut(.defaultAction)
+      }
+    }
+    .padding(20)
+    .frame(width: 460)
+  }
+}
+
+private struct PaperNotesList: View {
+  let notes: [PaperNote]
+  let onGoTo: (PaperNote) -> Void
+  let onEdit: (PaperNote) -> Void
+  let onDelete: (PaperNote) -> Void
+
+  /// Highlights in reading order, then chat answers in the order they were saved.
+  private var ordered: [PaperNote] {
+    notes.sorted { lhs, rhs in
+      if let left = lhs.pageNumber, let right = rhs.pageNumber {
+        guard left == right else { return left < right }
+        // PDF page space grows upward, so a higher line comes first.
+        return (lhs.rects.first?.maxY ?? 0) > (rhs.rects.first?.maxY ?? 0)
+      }
+      if lhs.pageNumber != nil || rhs.pageNumber != nil { return lhs.pageNumber != nil }
+      return lhs.createdAt < rhs.createdAt
+    }
+  }
+
+  /// Chat answers are Markdown; show their emphasis rather than the raw markers.
+  private static func inlineMarkdown(_ text: String) -> AttributedString {
+    (try? AttributedString(
+      markdown: text,
+      options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace, failurePolicy: .returnPartiallyParsedIfPossible)))
+      ?? AttributedString(text)
+  }
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 0) {
+      Text("Notes").font(.headline).padding(12)
+      Divider()
+      if notes.isEmpty {
+        Text("Select text in the PDF and choose Highlight, or save a chat answer as a note.")
+          .font(.callout)
+          .foregroundStyle(.secondary)
+          .padding(16)
+      } else {
+        List(ordered) { note in
+          VStack(alignment: .leading, spacing: 6) {
+            HStack {
+              if let page = note.pageNumber {
+                Label("p.\(page)", systemImage: "highlighter")
+              } else {
+                Label("Chat answer", systemImage: "bubble.left")
+              }
+              Spacer()
+              if note.pageNumber != nil {
+                Button("Go to") { onGoTo(note) }
+              } else {
+                Button("Copy") {
+                  NSPasteboard.general.clearContents()
+                  NSPasteboard.general.setString(note.text, forType: .string)
+                }
+              }
+              Button(note.comment.isEmpty ? "Add note" : "Edit") { onEdit(note) }
+              Button("Delete", role: .destructive) { onDelete(note) }
+            }
+            .font(.caption)
+            .buttonStyle(.link)
+            Text(Self.inlineMarkdown(note.text)).font(.callout).lineLimit(4)
+            if !note.comment.isEmpty {
+              Text(note.comment)
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .padding(.leading, 8)
+                .overlay(alignment: .leading) {
+                  Rectangle().fill(Color.yellow.opacity(0.6)).frame(width: 2)
+                }
+            }
+          }
+          .padding(.vertical, 4)
+        }
+        .listStyle(.plain)
+      }
+    }
+    .frame(width: 380, height: 460)
   }
 }
 
@@ -755,6 +955,8 @@ private struct ReviewHTMLPreview: View {
 
 private struct PaperChatView: View {
   @ObservedObject var controller: PaperChatController
+  var savedNoteMessageIDs: Set<UUID> = []
+  var onSaveNote: ((ChatMessageRecord) -> Void)?
   @AppStorage("chatTextSizePercent") private var textSizePercent = 100
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @State private var activeQuestionID: UUID?
@@ -829,7 +1031,9 @@ private struct PaperChatView: View {
                   questionCount: questions.count,
                   isActiveQuestion: message.id == activeQuestionID,
                   canRetry: controller.canRetry(message) && !controller.isRunning,
-                  onRetry: { controller.retry(message) })
+                  onRetry: { controller.retry(message) },
+                  isSavedAsNote: savedNoteMessageIDs.contains(message.id),
+                  onSaveNote: onSaveNote.map { save in { save(message) } })
                 .id(message.id)
                 .background {
                   if message.role == "user" {
@@ -1228,6 +1432,8 @@ private struct ChatMessageRow: View {
   let isActiveQuestion: Bool
   let canRetry: Bool
   let onRetry: () -> Void
+  var isSavedAsNote = false
+  var onSaveNote: (() -> Void)?
 
   private var isUser: Bool { message.role == "user" }
 
@@ -1289,7 +1495,19 @@ private struct ChatMessageRow: View {
           .font(.caption.weight(.semibold))
           .foregroundStyle(.secondary)
         ChatMessageContentView(text: message.draft ?? message.content)
-        timestamp
+        HStack(spacing: 10) {
+          timestamp
+          if let onSaveNote, message.deliveryState == "committed" {
+            Button(
+              isSavedAsNote ? "Saved as note" : "Save as note",
+              systemImage: isSavedAsNote ? "note.text" : "note.text.badge.plus",
+              action: onSaveNote
+            )
+            .buttonStyle(.link)
+            .font(.caption2)
+            .disabled(isSavedAsNote)
+          }
+        }
         deliveryState
       }
       .frame(maxWidth: .infinity, alignment: .leading)

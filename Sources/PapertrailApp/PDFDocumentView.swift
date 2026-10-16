@@ -77,15 +77,36 @@ struct PDFTextAnchor: Equatable {
 }
 
 enum PDFSelectionAction: Int, CaseIterable {
-  case explain, translate, ask
+  case explain, translate, ask, highlight, highlightWithNote
 
   var title: String {
     switch self {
     case .explain: "Explain Selection"
     case .translate: "Translate Selection"
     case .ask: "Ask About Selection"
+    case .highlight: "Highlight"
+    case .highlightWithNote: "Highlight with Note…"
     }
   }
+}
+
+/// The passage a selection action applies to. `rects` are its lines in page space.
+struct PDFSelectedPassage: Equatable {
+  let text: String
+  let pageNumber: Int
+  let rects: [CGRect]
+}
+
+/// A saved highlight drawn on a 0-based page; `note` shows as its tooltip.
+struct PDFUserHighlight: Equatable {
+  let id: UUID
+  let pageIndex: Int
+  let rects: [CGRect]
+  let note: String
+}
+
+enum PDFHighlightAction: Int {
+  case editNote, remove
 }
 
 struct PDFDocumentView: View {
@@ -96,8 +117,10 @@ struct PDFDocumentView: View {
   let onReadingStateChanged: (Int, Double) -> Void
   var focus: PDFFocusRequest?
   var highlights: [PDFTextAnchor] = []
-  /// Receives the action, the selected text, and its 1-based page number.
-  var onSelectionAction: ((PDFSelectionAction, String, Int) -> Void)?
+  var userHighlights: [PDFUserHighlight] = []
+  var onSelectionAction: ((PDFSelectionAction, PDFSelectedPassage) -> Void)?
+  /// Receives an action chosen on an existing highlight, by its id.
+  var onHighlightAction: ((PDFHighlightAction, UUID) -> Void)?
 
   @State private var isSearchVisible = false
   @State private var searchQuery = ""
@@ -111,10 +134,10 @@ struct PDFDocumentView: View {
       PDFViewRepresentable(
         url: url, pageIndex: pageIndex, scale: scale, isDarkMode: isDarkMode,
         searchQuery: submittedSearchQuery, searchIndex: searchIndex,
-        focus: focus, highlights: highlights,
+        focus: focus, highlights: highlights, userHighlights: userHighlights,
         onSearchResultCountChanged: { searchResultCount = $0 },
         onReadingStateChanged: onReadingStateChanged,
-        onSelectionAction: onSelectionAction
+        onSelectionAction: onSelectionAction, onHighlightAction: onHighlightAction
       )
       .accessibilityLabel("Stored source PDF")
 
@@ -196,9 +219,11 @@ private struct PDFViewRepresentable: NSViewRepresentable {
   let searchIndex: Int
   let focus: PDFFocusRequest?
   let highlights: [PDFTextAnchor]
+  let userHighlights: [PDFUserHighlight]
   let onSearchResultCountChanged: (Int) -> Void
   let onReadingStateChanged: (Int, Double) -> Void
-  let onSelectionAction: ((PDFSelectionAction, String, Int) -> Void)?
+  let onSelectionAction: ((PDFSelectionAction, PDFSelectedPassage) -> Void)?
+  let onHighlightAction: ((PDFHighlightAction, UUID) -> Void)?
 
   func makeCoordinator() -> Coordinator {
     Coordinator(
@@ -220,8 +245,10 @@ private struct PDFViewRepresentable: NSViewRepresentable {
     context.coordinator.applyAppearance(isDarkMode: isDarkMode, to: view)
     context.coordinator.applySearch(query: searchQuery, index: searchIndex, to: view)
     context.coordinator.applyHighlights(highlights, to: view)
+    context.coordinator.applyUserHighlights(userHighlights, to: view)
     context.coordinator.applyFocus(focus, to: view)
     view.onSelectionAction = onSelectionAction
+    view.onHighlightAction = onHighlightAction
     return view
   }
 
@@ -232,8 +259,10 @@ private struct PDFViewRepresentable: NSViewRepresentable {
     context.coordinator.applyAppearance(isDarkMode: isDarkMode, to: view)
     context.coordinator.applySearch(query: searchQuery, index: searchIndex, to: view)
     context.coordinator.applyHighlights(highlights, to: view)
+    context.coordinator.applyUserHighlights(userHighlights, to: view)
     context.coordinator.applyFocus(focus, to: view)
     view.onSelectionAction = onSelectionAction
+    view.onHighlightAction = onHighlightAction
   }
 
   static func dismantleNSView(_ view: AppearancePDFView, coordinator: Coordinator) {
@@ -259,6 +288,9 @@ private struct PDFViewRepresentable: NSViewRepresentable {
     private var appliedHighlights: [PDFTextAnchor] = []
     private weak var highlightedDocument: PDFDocument?
     private var highlightAnnotations: [PDFAnnotation] = []
+    private var appliedUserHighlights: [PDFUserHighlight] = []
+    private weak var userHighlightedDocument: PDFDocument?
+    private var userAnnotations: [PDFAnnotation] = []
 
     init(
       onSearchResultCountChanged: @escaping (Int) -> Void,
@@ -411,10 +443,35 @@ private struct PDFViewRepresentable: NSViewRepresentable {
         for line in selection.selectionsByLine() {
           let annotation = PDFAnnotation(
             bounds: line.bounds(for: page), forType: .highlight, withProperties: nil)
-          annotation.color = NSColor.systemYellow.withAlphaComponent(0.35)
+          annotation.color = NSColor.systemTeal.withAlphaComponent(0.22)
           annotation.isReadOnly = true
           page.addAnnotation(annotation)
           highlightAnnotations.append(annotation)
+        }
+      }
+    }
+
+    /// Saved highlights, kept apart from evidence highlights so each set updates on its own.
+    func applyUserHighlights(_ highlights: [PDFUserHighlight], to view: PDFView) {
+      guard highlights != appliedUserHighlights || view.document !== userHighlightedDocument
+      else { return }
+      for annotation in userAnnotations { annotation.page?.removeAnnotation(annotation) }
+      userAnnotations = []
+      appliedUserHighlights = highlights
+      userHighlightedDocument = view.document
+      guard let document = view.document else { return }
+      for highlight in highlights {
+        guard (0..<document.pageCount).contains(highlight.pageIndex),
+          let page = document.page(at: highlight.pageIndex)
+        else { continue }
+        for rect in highlight.rects {
+          let annotation = PDFAnnotation(bounds: rect, forType: .highlight, withProperties: nil)
+          annotation.color = NSColor.systemYellow.withAlphaComponent(0.4)
+          annotation.userName = AppearancePDFView.highlightPrefix + highlight.id.uuidString
+          annotation.isReadOnly = true
+          if !highlight.note.isEmpty { annotation.contents = highlight.note }
+          page.addAnnotation(annotation)
+          userAnnotations.append(annotation)
         }
       }
     }
@@ -470,38 +527,81 @@ private struct PDFViewRepresentable: NSViewRepresentable {
 /// Blends above live PDFKit tiles instead of caching them through a content filter.
 final class AppearancePDFView: PDFView {
   private let tint = PDFTintView()
-  var onSelectionAction: ((PDFSelectionAction, String, Int) -> Void)?
+  static let highlightPrefix = "papertrail-highlight:"
+  var onSelectionAction: ((PDFSelectionAction, PDFSelectedPassage) -> Void)?
+  var onHighlightAction: ((PDFHighlightAction, UUID) -> Void)?
 
   override func menu(for event: NSEvent) -> NSMenu? {
     // Capture before super: building PDFKit's menu can clear the selection.
-    guard onSelectionAction != nil, let document, let selection = currentSelection,
-      let text = selection.string, text.contains(where: { !$0.isWhitespace }),
-      let page = selection.pages.first
-    else { return super.menu(for: event) }
-    let pageNumber = document.index(for: page) + 1
-    let menu = super.menu(for: event) ?? NSMenu()
-    for action in PDFSelectionAction.allCases {
-      let item = NSMenuItem(
-        title: action.title, action: #selector(performSelectionAction(_:)), keyEquivalent: "")
-      item.target = self
-      item.tag = action.rawValue
-      item.representedObject = SelectedText(text: text, pageNumber: pageNumber)
-      menu.insertItem(item, at: action.rawValue)
+    let passage = selectedPassage()
+    let highlight = onHighlightAction == nil ? nil : highlightID(at: event)
+    guard passage != nil || highlight != nil else { return super.menu(for: event) }
+    // Over a saved highlight PDFKit adds its own markup items (colors, Remove Highlight, Remove
+    // Note) that would change the page without updating the saved notes, so leave them out.
+    let menu = highlight == nil ? (super.menu(for: event) ?? NSMenu()) : NSMenu()
+    var index = 0
+    if let highlight {
+      for (title, action) in [("Edit Note…", PDFHighlightAction.editNote), ("Remove Highlight", .remove)] {
+        let item = NSMenuItem(
+          title: title, action: #selector(performHighlightAction(_:)), keyEquivalent: "")
+        item.target = self
+        item.tag = action.rawValue
+        item.representedObject = highlight
+        menu.insertItem(item, at: index)
+        index += 1
+      }
     }
-    menu.insertItem(.separator(), at: PDFSelectionAction.allCases.count)
+    if let passage {
+      for action in PDFSelectionAction.allCases {
+        let item = NSMenuItem(
+          title: action.title, action: #selector(performSelectionAction(_:)), keyEquivalent: "")
+        item.target = self
+        item.tag = action.rawValue
+        item.representedObject = passage
+        menu.insertItem(item, at: index)
+        index += 1
+      }
+    }
+    menu.insertItem(.separator(), at: index)
     return menu
   }
 
-  private struct SelectedText {
-    let text: String
-    let pageNumber: Int
+  /// The selected text with its first page; a selection spanning pages highlights that page only.
+  private func selectedPassage() -> PDFSelectedPassage? {
+    guard onSelectionAction != nil, let document, let selection = currentSelection,
+      let text = selection.string, text.contains(where: { !$0.isWhitespace }),
+      let page = selection.pages.first
+    else { return nil }
+    let rects = selection.selectionsByLine()
+      .filter { $0.pages.first === page }
+      .map { $0.bounds(for: page) }
+    return PDFSelectedPassage(text: text, pageNumber: document.index(for: page) + 1, rects: rects)
+  }
+
+  func highlightID(at event: NSEvent) -> UUID? {
+    let point = convert(event.locationInWindow, from: nil)
+    guard let page = page(for: point, nearest: false) else { return nil }
+    let pagePoint = convert(point, to: page)
+    return page.annotations.lazy.compactMap { annotation -> UUID? in
+      guard annotation.bounds.contains(pagePoint), let name = annotation.userName,
+        name.hasPrefix(Self.highlightPrefix)
+      else { return nil }
+      return UUID(uuidString: String(name.dropFirst(Self.highlightPrefix.count)))
+    }.first
   }
 
   @objc private func performSelectionAction(_ sender: NSMenuItem) {
     guard let action = PDFSelectionAction(rawValue: sender.tag),
-      let selected = sender.representedObject as? SelectedText
+      let passage = sender.representedObject as? PDFSelectedPassage
     else { return }
-    onSelectionAction?(action, selected.text, selected.pageNumber)
+    onSelectionAction?(action, passage)
+  }
+
+  @objc private func performHighlightAction(_ sender: NSMenuItem) {
+    guard let action = PDFHighlightAction(rawValue: sender.tag),
+      let id = sender.representedObject as? UUID
+    else { return }
+    onHighlightAction?(action, id)
   }
 
   override func layout() {

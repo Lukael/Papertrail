@@ -46,6 +46,7 @@ final class PaperLibraryController: ObservableObject {
   private let chatRuntimeRegistry = PaperChatRuntimeRegistry()
   private var reviewControllers: [UUID: ReviewGenerationController] = [:]
   private var chatControllers: [UUID: PaperChatController] = [:]
+  private var notesModels: [UUID: PaperNotesModel] = [:]
   private var supplementaryMerges: Set<UUID> = []
   private var tagsByPaper: [UUID: [String]] = [:]
   private var latestUserChatByPaper: [UUID: Date] = [:]
@@ -154,6 +155,14 @@ final class PaperLibraryController: ObservableObject {
     #endif
     reviewControllers[paperID] = controller
     return controller
+  }
+
+  func notes(paperID: UUID) -> PaperNotesModel {
+    if let existing = notesModels[paperID] { return existing }
+    let model = PaperNotesModel(
+      paperID: paperID, store: PaperNoteStore(paths: paths), activityLog: activityLog)
+    notesModels[paperID] = model
+    return model
   }
 
   func chatController(paperID: UUID) -> PaperChatController {
@@ -348,6 +357,7 @@ final class PaperLibraryController: ObservableObject {
       #endif
       reviewControllers[paperID] = nil
       chatControllers[paperID] = nil
+      notesModels[paperID] = nil
       tagsByPaper[paperID] = nil
       reload()
       guard !receipt.fileCleanupPending else {
