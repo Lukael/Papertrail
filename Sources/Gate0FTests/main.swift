@@ -1,5 +1,7 @@
+import CoreText
 import CryptoKit
 import Foundation
+import PDFKit
 import PapertrailCore
 
 struct Failure: Error, CustomStringConvertible { let description: String }
@@ -44,6 +46,7 @@ func expect(_ value: @autoclosure () -> Bool, _ message: String) throws {
       ("a rejected document is corrected once in the same session", testCorrectionSucceeds),
       ("a second rejection falls back to removing unverifiable evidence", testCorrectionFallsBackToPruning),
       ("a document that pruning cannot save fails closed without promotion", testCorrectionFailsClosed),
+      ("a promoted review exports as a PowerPoint deck with the paper's figures", testDeckExport),
     ]
     var passed = 0
     for (name, test) in tests {
@@ -925,9 +928,75 @@ func expect(_ value: @autoclosure () -> Bool, _ message: String) throws {
     let recoveryBody = String(swiftData[recoveryStart.lowerBound..<recoveryEnd.lowerBound])
     try expect(recoveryBody.components(separatedBy: "context.save()").count - 1 == 1, "SwiftData recovery is split across multiple saves")
     try expect(recoveryBody.contains("ReviewPromotionPhase.recoveryRequired.rawValue"), "SwiftData atomic recovery does not commit recoveryRequired")
-    for required in ["Generate document", "Regenerate document", "Versions", "conversation so far"] {
+    for required in ["Generate document", "Regenerate document", "Versions", "conversation so far", "Export PowerPoint…"] {
       try expect(view.contains(required), "review UI lacks \(required)")
     }
+    try expect(controller.contains("ReviewDeckExporter().export"), "review controller does not export decks")
+  }
+
+  static func testDeckExport() throws {
+    let fixture = try makeFixture(); defer { try? fm.removeItem(at: fixture.root) }
+    let executable = fixture.root.appendingPathComponent("fake-claude")
+    try fakeExecutable(executable, mode: "success")
+    let identity = ReviewGenerationIdentity()
+    _ = try fixture.service.generate(
+      paperID: fixture.paperID, executableURL: executable, identity: identity,
+      metadata: .unavailable(reason: "offline test"))
+    let document = try ReviewDeckExporter.promotedDocument(
+      workspace: fixture.paths.generationWorkspace(identity.generationID, paperID: fixture.paperID),
+      operationID: identity.operationID, pageTexts: { [] })
+    // The fixture paper has no artwork, so the deck crops from a page with a captioned table.
+    let figurePDF = fixture.root.appendingPathComponent("figure.pdf")
+    var mediaBox = CGRect(x: 0, y: 0, width: 612, height: 792)
+    guard let context = CGContext(figurePDF as CFURL, mediaBox: &mediaBox, nil) else {
+      throw Failure(description: "figure PDF could not be created")
+    }
+    context.beginPDFPage(nil)
+    context.textPosition = CGPoint(x: 150, y: 620)
+    CTLineDraw(CTLineCreateWithAttributedString(NSAttributedString(
+      string: "Table 1: Fixed observations and their mean",
+      attributes: [.font: CTFontCreateWithName("Helvetica" as CFString, 12, nil)])), context)
+    context.stroke(CGRect(x: 150, y: 450, width: 312, height: 150))
+    context.stroke(CGRect(x: 150, y: 525, width: 312, height: 75))
+    context.endPDFPage()
+    context.closePDF()
+    let pdf = PDFDocument(url: figurePDF)
+    let deck = fixture.root.appendingPathComponent("deck.pptx")
+    let summary = try ReviewDeckExporter().export(
+      document: document, paperTitle: "Paper", pdf: pdf, to: deck)
+    try expect(
+      summary.slideCount == document.slides.count + 1 && summary.figureCount == 1
+        && summary.placedFigureCount == 1,
+      "deck summary is wrong: \(summary)")
+
+    let unpacked = fixture.root.appendingPathComponent("deck", isDirectory: true)
+    let unzip = Process()
+    unzip.executableURL = URL(fileURLWithPath: "/usr/bin/unzip")
+    unzip.arguments = ["-q", deck.path, "-d", unpacked.path]
+    try unzip.run(); unzip.waitUntilExit()
+    try expect(unzip.terminationStatus == 0, "deck is not a zip archive")
+    let parts = (fm.enumerator(atPath: unpacked.path)?.allObjects as? [String] ?? [])
+    try expect(parts.contains("[Content_Types].xml"), "deck lacks its content types part")
+    for part in parts where part.hasSuffix(".xml") || part.hasSuffix(".rels") {
+      let parser = XMLParser(contentsOf: unpacked.appendingPathComponent(part))
+      try expect(parser?.parse() == true, "\(part) is not well-formed XML")
+    }
+    try expect(
+      parts.filter { $0.hasPrefix("ppt/slides/slide") }.count == summary.slideCount,
+      "deck slide parts do not match the summary")
+    try expect(parts.filter { $0.hasPrefix("ppt/media/") }.count == 1, "the cited table was not embedded")
+    // The method slide is the deck's third: the title slide comes first.
+    let slide = try String(
+      contentsOf: unpacked.appendingPathComponent("ppt/slides/slide3.xml"), encoding: .utf8)
+    try expect(
+      slide.contains("Table 1 · p.1") && !slide.contains("페이지 전체"),
+      "the table was not cropped from its page")
+    let notes = try String(
+      contentsOf: unpacked.appendingPathComponent("ppt/notesSlides/notesSlide3.xml"), encoding: .utf8)
+    try expect(
+      notes.contains("방법은 단순합니다") && notes.contains("Q. 학습이 필요한가요?")
+        && notes.contains("Eq. 1: 네 관측값의 산술 평균입니다."),
+      "speaker notes lack the script, Q&A, or equation meaning")
   }
 
   static func testDraftProgress() throws {

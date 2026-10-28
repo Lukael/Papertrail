@@ -857,6 +857,9 @@ private struct ReviewGenerationView: View {
           ProgressView().controlSize(.small)
         }
         Spacer()
+        Button("Export PowerPoint…", systemImage: "square.and.arrow.up") { exportDeck() }
+          .disabled(controller.selectedReviewLocation == nil || controller.isExporting)
+          .help("Save the selected version as a .pptx deck with the paper's figures. Google Slides and Keynote open it too.")
         Menu("Versions") {
           let selected = controller.selectedVersionID
           // Newest first; numbers follow creation order so a version keeps its name.
@@ -888,6 +891,14 @@ private struct ReviewGenerationView: View {
     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
     .accessibilityElement(children: .contain)
     .accessibilityLabel("Review reader")
+  }
+
+  private func exportDeck() {
+    let panel = NSSavePanel()
+    panel.allowedContentTypes = [UTType(filenameExtension: "pptx") ?? .data]
+    panel.nameFieldStringValue = controller.deckFileName
+    guard panel.runModal() == .OK, let url = panel.url else { return }
+    controller.exportDeck(to: url)
   }
 
   private func versionTitle(_ generation: ReviewGenerationRecord, number: Int) -> String {

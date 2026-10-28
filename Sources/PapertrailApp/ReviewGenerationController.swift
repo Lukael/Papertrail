@@ -1,4 +1,5 @@
 import Foundation
+import PDFKit
 import PapertrailCore
 import SwiftUI
 
@@ -10,6 +11,7 @@ import SwiftUI
 final class ReviewGenerationController: ObservableObject {
   @Published private(set) var generations: [ReviewGenerationRecord] = []
   @Published private(set) var isRunning = false
+  @Published private(set) var isExporting = false
   @Published var status: String?
 
   let paperID: UUID
@@ -216,6 +218,57 @@ final class ReviewGenerationController: ObservableObject {
     activityLog.upsert(
       key: "review:\(paperID.uuidString):live", source: .agent,
       message: "\(liveStatus) · \(clock)")
+  }
+
+  /// The paper's title as a file name for the exported deck.
+  var deckFileName: String {
+    let title = (try? store.paper(id: paperID))?.title ?? "Review"
+    return title.replacingOccurrences(of: "/", with: "-").replacingOccurrences(of: ":", with: "-")
+      + ".pptx"
+  }
+
+  /// Writes the selected version as a PowerPoint deck with figures cropped from the paper's PDF.
+  func exportDeck(to destination: URL) {
+    guard !isExporting else { return }
+    guard let selected = selectedVersionID,
+      let record = generations.first(where: { $0.reviewVersionID == selected }),
+      let operationID = record.operationID, let paper = try? store.paper(id: paperID)
+    else {
+      status = "The selected review version cannot be exported."
+      activityLog.append(level: .error, status ?? "Presentation export failed.")
+      return
+    }
+    isExporting = true
+    status = "Exporting the presentation…"
+    Task {
+      let result = await Task.detached(priority: .userInitiated) { [paths, paperID] in
+        Result {
+          let workspace = try paths.url(forRelativePath: record.workspaceRelativePath)
+          let source = try paths.url(forRelativePath: paper.sourceRelativePath)
+          let document = try ReviewDeckExporter.promotedDocument(
+            workspace: workspace, operationID: operationID
+          ) {
+            try PDFExtractedTextCache(paths: paths).resolve(
+              paperID: paperID, sourceURL: source, expectedSourceSHA256: paper.sourceSHA256
+            ).readPages()
+          }
+          return try ReviewDeckExporter().export(
+            document: document, paperTitle: paper.title, pdf: PDFDocument(url: source),
+            to: destination)
+        }
+      }.value
+      switch result {
+      case .success(let summary):
+        let missing = summary.figureCount - summary.placedFigureCount
+        status = "Exported \(summary.slideCount) slides to \(destination.lastPathComponent)"
+          + (missing == 0 ? "" : " · \(missing) of \(summary.figureCount) figures not found in the PDF")
+        activityLog.append(level: missing == 0 ? .success : .warning, status ?? "Presentation exported.")
+      case .failure(let error):
+        status = "The presentation could not be exported: \(error.localizedDescription)"
+        activityLog.append(level: .error, status ?? "Presentation export failed.")
+      }
+      isExporting = false
+    }
   }
 
   func cancel() {
