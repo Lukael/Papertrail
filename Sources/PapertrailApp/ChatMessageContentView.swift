@@ -43,24 +43,26 @@ struct ChatMessageContentView: View {
       }
     }
     .task(id: text) {
-      let hasMath = ChatMathContent.segments(in: text).contains {
-        if case .math = $0 { return true }
-        return false
-      }
-      let linked = PaperSourceLink.linkingPageCitations(in: text)
-      guard hasMath || ChatMarkdownRenderer.requiresHTML(in: linked) else {
-        html = nil
-        renderingError = nil
-        return
-      }
-      switch ChatMathRenderer.shared {
-      case .success(let renderer):
-        html = renderer.html(for: linked)
-        renderingError = nil
-      case .failure(let error):
-        html = nil
-        renderingError = error.localizedDescription
-      }
+      // Off the main thread: opening a chat renders up to a page of messages at once, and the
+      // first math message also loads KaTeX.
+      let rendered = await Task.detached(priority: .userInitiated) { [text] in
+        Self.render(text)
+      }.value
+      guard !Task.isCancelled else { return }
+      (html, renderingError) = rendered
+    }
+  }
+
+  private nonisolated static func render(_ text: String) -> (html: String?, error: String?) {
+    let hasMath = ChatMathContent.segments(in: text).contains {
+      if case .math = $0 { return true }
+      return false
+    }
+    let linked = PaperSourceLink.linkingPageCitations(in: text)
+    guard hasMath || ChatMarkdownRenderer.requiresHTML(in: linked) else { return (nil, nil) }
+    switch ChatMathRenderer.shared {
+    case .success(let renderer): return (renderer.html(for: linked), nil)
+    case .failure(let error): return (nil, error.localizedDescription)
     }
   }
 }

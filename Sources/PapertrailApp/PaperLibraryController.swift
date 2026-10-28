@@ -50,6 +50,7 @@ final class PaperLibraryController: ObservableObject {
   private var supplementaryMerges: Set<UUID> = []
   private var tagsByPaper: [UUID: [String]] = [:]
   private var latestUserChatByPaper: [UUID: Date] = [:]
+  private var readingStateSaves: [UUID: Task<Void, Never>] = [:]
 
   #if PPR_PORTABLE_SCHEMA
     private let store: DurableModelStore
@@ -283,6 +284,24 @@ final class PaperLibraryController: ObservableObject {
   func updateReadingState(paperID: UUID, pageIndex: Int, scale: Double) {
     let safePage = max(0, pageIndex)
     let safeScale = scale.isFinite ? min(max(scale, 0.1), 16) : 1
+    guard let index = papers.firstIndex(where: { $0.id == paperID }),
+      papers[index].pageIndex != safePage || papers[index].scale != safeScale
+    else { return }
+    // Update the list at once so a re-render never resets the PDF to a stale page.
+    papers[index].pageIndex = safePage
+    papers[index].scale = safeScale
+    // Scrolling and zooming report every page and frame; write to disk once they settle.
+    // shortcut: a quit within 0.5 s of the last scroll loses that last position.
+    readingStateSaves[paperID]?.cancel()
+    readingStateSaves[paperID] = Task { [weak self] in
+      try? await Task.sleep(for: .milliseconds(500))
+      guard !Task.isCancelled else { return }
+      self?.saveReadingState(paperID: paperID, pageIndex: safePage, scale: safeScale)
+    }
+  }
+
+  private func saveReadingState(paperID: UUID, pageIndex safePage: Int, scale safeScale: Double) {
+    readingStateSaves[paperID] = nil
     do {
       #if PPR_PORTABLE_SCHEMA
         try store.transaction { snapshot in
@@ -305,7 +324,6 @@ final class PaperLibraryController: ObservableObject {
         paper.updatedAt = Date()
         try context.save()
       #endif
-      reload()
     } catch {
       notice = "Reading position could not be saved: \(error.localizedDescription)"
       activityLog.append(level: .error, notice ?? "Reading position save failed.")

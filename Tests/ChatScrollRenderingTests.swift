@@ -5,14 +5,18 @@ import WebKit
 // In-memory fixture: the production View is compiled by verify-chat-scroll.py.
 // No library files, Claude sessions, or user messages are accessed.
 struct ChatLiveAssistantState { var reasoning: String?; var response: String? }
+@MainActor final class ChatDraft: ObservableObject { @Published var text = "" }
 @MainActor final class PaperChatController: ObservableObject {
   @Published var messages: [ChatMessageRecord] = []
-  @Published var input = ""
+  let draft = ChatDraft()
+  var input: String {
+    get { draft.text }
+    set { draft.text = newValue }
+  }
   var isLoading = false
   @Published var isRunning = false
   var isAvailable = true
   @Published var liveAssistant: ChatLiveAssistantState?
-  @Published var liveRevision = 0
   func canRetry(_ m: ChatMessageRecord) -> Bool { false }
   func retry(_ m: ChatMessageRecord) {}
   var sendCount = 0
@@ -27,7 +31,6 @@ struct ChatLiveAssistantState { var reasoning: String?; var response: String? }
       id: UUID(), paperID: UUID(), sessionID: UUID(), operationID: nil,
       role: "user", content: text, draft: nil, deliveryState: "sending", createdAt: Date()))
     liveAssistant = ChatLiveAssistantState(reasoning: "Thinking…", response: nil)
-    liveRevision += 1
   }
   func cancel() {}
   func refreshContext() {}
@@ -46,6 +49,10 @@ struct ChatLiveAssistantState { var reasoning: String?; var response: String? }
     }
     if CommandLine.arguments.contains("--citation") {
       verifyCitationLink()
+      return
+    }
+    if CommandLine.arguments.contains("--opens-at-end") {
+      verifyOpensAtEnd()
       return
     }
     let controller = PaperChatController()
@@ -75,15 +82,17 @@ struct ChatLiveAssistantState { var reasoning: String?; var response: String? }
     window.displayIfNeeded()
     let initialLayoutMilliseconds = (CFAbsoluteTimeGetCurrent() - initialLayoutStarted) * 1000
     RunLoop.current.run(until: Date().addingTimeInterval(1))
-    func find(_ v: NSView) -> NSScrollView? {
-      if let s = v as? NSScrollView { return s }
-      for child in v.subviews { if let result = find(child) { return result } }
-      return nil
-    }
     func countWebViews(_ view: NSView) -> Int {
       (view is WKWebView ? 1 : 0) + view.subviews.reduce(0) { $0 + countWebViews($1) }
     }
-    guard let scroll = find(hosting), let doc = scroll.documentView else { fatalError("No transcript scroll view") }
+    guard let scroll = transcriptScrollView(in: hosting), let doc = scroll.documentView else { fatalError("No transcript scroll view") }
+    // WebKit measures formatted messages after layout; the transcript follows that growth while
+    // at its end, so start the gesture once heights settle.
+    var settledHeight: CGFloat = 0
+    while doc.frame.height != settledHeight {
+      settledHeight = doc.frame.height
+      RunLoop.current.run(until: Date().addingTimeInterval(0.3))
+    }
     let webViewCount = countWebViews(hosting)
     if isTable || isMarkdown {
       precondition(webViewCount == min(count, ChatTranscriptWindow.pageSize) / 2,
@@ -115,15 +124,16 @@ struct ChatLiveAssistantState { var reasoning: String?; var response: String? }
       RunLoop.current.run(until: Date().addingTimeInterval(0.008))
     }
     let initial = scroll.contentView.bounds.origin.y
+    precondition(distanceFromEnd(scroll) < 1, "an open transcript must start at its latest message")
     send(event(1,0,0), hit: doc)
-    for _ in 0..<30 { send(event(2,0,-12), hit: doc) }
+    for _ in 0..<30 { send(event(2,0,12), hit: doc) }
     send(event(4,0,0), hit: hosting)
     let fingerEnd = scroll.contentView.bounds.origin.y
     send(event(0,1,0), hit: hosting)
-    for _ in 0..<60 { send(event(0,2,-8), hit: hosting) }
+    for _ in 0..<60 { send(event(0,2,8), hit: hosting) }
     send(event(0,3,0), hit: hosting)
     let finalPosition = scroll.contentView.bounds.origin.y
-    precondition(fingerEnd > initial && finalPosition > fingerEnd + 100, "momentum did not continue after finger lift")
+    precondition(fingerEnd < initial && finalPosition < fingerEnd - 100, "momentum did not continue after finger lift")
     let sorted = times.sorted()
     let result: [String: Any] = ["messages":count,"events":times.count,
       "initial_layout_ms":initialLayoutMilliseconds,"math_webviews":webViewCount,
@@ -132,6 +142,54 @@ struct ChatLiveAssistantState { var reasoning: String?; var response: String? }
       "documentHeight":doc.frame.height,"status":"passed"]
     print(String(data: try JSONSerialization.data(withJSONObject: result, options: [.sortedKeys]), encoding: .utf8)!)
     window.orderOut(nil)
+  }
+
+  static func transcriptScrollView(in view: NSView) -> NSScrollView? {
+    if let scroll = view as? NSScrollView { return scroll }
+    return view.subviews.lazy.compactMap { transcriptScrollView(in: $0) }.first
+  }
+
+  static func distanceFromEnd(_ scroll: NSScrollView) -> CGFloat {
+    let clip = scroll.contentView
+    var end = clip.bounds
+    end.origin.y = scroll.documentView!.frame.maxY
+    return clip.constrainBoundsRect(end).origin.y - clip.bounds.origin.y
+  }
+
+  /// Relaunch: the chat appears empty, history arrives later and math grows after layout.
+  static func verifyOpensAtEnd() {
+    let controller = PaperChatController()
+    let window = NSWindow(contentRect: NSRect(x: 100, y: 100, width: 650, height: 760),
+      styleMask: [.titled], backing: .buffered, defer: false)
+    let hosting = NSHostingView(rootView: PaperChatView(controller: controller))
+    window.contentView = hosting
+    window.orderFront(nil)
+    RunLoop.current.run(until: Date().addingTimeInterval(0.3))
+    let answer = "$x^2+y^2$\n" + String(repeating: "Stored answer with mathematics. ", count: 40)
+    controller.messages = (0..<20).map { i in
+      ChatMessageRecord(id: UUID(), paperID: UUID(), sessionID: UUID(), operationID: nil,
+        role: i % 2 == 0 ? "user" : "assistant", content: i % 2 == 0 ? "Question \(i)" : answer,
+        draft: nil, deliveryState: "committed", createdAt: Date())
+    }
+    RunLoop.current.run(until: Date().addingTimeInterval(2))
+    guard let scroll = transcriptScrollView(in: hosting) else { fatalError("No transcript scroll view") }
+    precondition(scroll.documentView!.frame.height > 2000, "history did not lay out")
+    precondition(distanceFromEnd(scroll) < 1,
+      "a transcript loaded after launch must show its latest message: \(distanceFromEnd(scroll))pt above")
+
+    let reply = String(repeating: "Streaming reply text. ", count: 30)
+    controller.liveAssistant = ChatLiveAssistantState(reasoning: nil, response: reply)
+    RunLoop.current.run(until: Date().addingTimeInterval(0.5))
+    precondition(distanceFromEnd(scroll) < 1, "a reader at the end must follow a streaming reply")
+
+    scroll.contentView.scroll(to: NSPoint(x: 0, y: 400))
+    scroll.reflectScrolledClipView(scroll.contentView)
+    controller.liveAssistant = ChatLiveAssistantState(reasoning: nil, response: reply + reply)
+    RunLoop.current.run(until: Date().addingTimeInterval(0.5))
+    precondition(abs(scroll.contentView.bounds.origin.y - 400) < 1,
+      "a reader who scrolled up must not be pulled to a streaming reply")
+    window.orderOut(nil)
+    print("PASS chat transcript opens at its end, follows replies only while at the end")
   }
 
   static func verifyComposer(messageCount: Int) {

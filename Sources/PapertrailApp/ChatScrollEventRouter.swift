@@ -274,6 +274,9 @@ struct ChatScrollBoundaryView: NSViewRepresentable {
 
   @MainActor final class BoundaryView: NSView {
     private weak var registeredScrollView: NSScrollView?
+    /// True while the reader is at the end: loading, streaming and math layout then keep the
+    /// transcript there instead of leaving it wherever the first, shorter layout put it.
+    private var followsEnd = true
 
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
 
@@ -310,13 +313,53 @@ struct ChatScrollBoundaryView: NSViewRepresentable {
       if let transcript {
         ChatScrollEventRouter.shared.register(transcript)
         registeredScrollView = transcript
+        followEnd(of: transcript)
       }
     }
 
     func detach() {
       guard let registeredScrollView else { return }
       ChatScrollEventRouter.shared.unregister(registeredScrollView)
+      NotificationCenter.default.removeObserver(self)
       self.registeredScrollView = nil
+    }
+
+    /// A transcript opens at its latest message.
+    private func followEnd(of scrollView: NSScrollView) {
+      guard let document = scrollView.documentView else { return }
+      scrollView.contentView.postsBoundsChangedNotifications = true
+      document.postsFrameChangedNotifications = true
+      NotificationCenter.default.addObserver(
+        self, selector: #selector(readerScrolled), name: NSView.boundsDidChangeNotification,
+        object: scrollView.contentView)
+      NotificationCenter.default.addObserver(
+        self, selector: #selector(contentResized), name: NSView.frameDidChangeNotification,
+        object: document)
+      followsEnd = true
+      scrollToEnd()
+    }
+
+    private var endOrigin: NSPoint? {
+      guard let clip = registeredScrollView?.contentView, let document = clip.documentView
+      else { return nil }
+      var end = clip.bounds
+      end.origin.y = document.frame.maxY
+      return clip.constrainBoundsRect(end).origin
+    }
+
+    @objc private func readerScrolled() {
+      guard let clip = registeredScrollView?.contentView, let end = endOrigin else { return }
+      followsEnd = end.y - clip.bounds.origin.y <= 24
+    }
+
+    @objc private func contentResized() {
+      if followsEnd { scrollToEnd() }
+    }
+
+    private func scrollToEnd() {
+      guard let scrollView = registeredScrollView, let end = endOrigin else { return }
+      scrollView.contentView.scroll(to: end)
+      scrollView.reflectScrolledClipView(scrollView.contentView)
     }
 
     private func scheduleRegistrationRefresh() {
