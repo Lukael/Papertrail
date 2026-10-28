@@ -66,7 +66,6 @@ public struct PDFImporter: Sendable {
     existingPapers: [Paper] = []
   ) throws -> PDFImportResult {
     _ = try validateSource(sourceURL)
-    _ = try PDFTitleExtractor().extract(from: sourceURL)
     guard let title = FilenameSanitizer.displayTitle(requestedTitle) else {
       throw PDFImportError.emptyTitle
     }

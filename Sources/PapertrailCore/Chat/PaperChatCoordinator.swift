@@ -37,10 +37,6 @@ public actor PaperChatCoordinator {
     self.runtimeRegistry = runtimeRegistry
   }
 
-  public func messages(paperID: UUID) throws -> [ChatMessageRecord] {
-    try store.messages(paperID: paperID)
-  }
-
   public func send(
     paperID: UUID, text: String,
     progress: (@Sendable (AgentLiveProgress) -> Void)? = nil
@@ -68,10 +64,6 @@ public actor PaperChatCoordinator {
     }
     return try stageAndCommitReplacement(
       paperID: paperID, predecessor: predecessor, reason: reason)
-  }
-
-  public func cancel(operationID: UUID) async {
-    await runtimeRegistry.cancel(operationID: operationID)
   }
 
   public func cancelCurrent(paperID: UUID) async {

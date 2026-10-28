@@ -106,10 +106,6 @@ public actor PaperChatRuntimeRegistry {
     activeOperations[key]?.token.cancel()
   }
 
-  public func cancel(operationID: UUID) {
-    activeOperations.values.first(where: { $0.operationID == operationID })?.token.cancel()
-  }
-
   private func runRegistered<T: Sendable>(
     key: ChatQueueKey, operationID: UUID, cancellation: AgentCancellationToken,
     operation: @Sendable () async throws -> T
