@@ -40,9 +40,16 @@ import Foundation
     precondition(afterRejection == notes, "a rejected save replaced the notes")
 
     let noteFile = paths.paper(paper).appendingPathComponent("notes.json")
+    // The app shows no notes when the file is unreadable; the next save must not wipe it.
+    let unreadable = Data("{ not json".utf8)
+    try unreadable.write(to: noteFile)
+    precondition((try? store.save([notes[0]], paperID: paper)) == nil, "an unreadable note file was replaced")
+    let afterBlockedSave = try Data(contentsOf: noteFile)
+    precondition(afterBlockedSave == unreadable, "an unreadable note file was changed")
+
     try fileManager.removeItem(at: noteFile)
     try fileManager.createSymbolicLink(at: noteFile, withDestinationURL: testRoot)
     precondition((try? store.load(paperID: paper)) == nil, "a symlinked note file was read")
-    print("PASS paper note store: round trip, size limit, symlink refusal")
+    print("PASS paper note store: round trip, size limit, unreadable-file protection, symlink refusal")
   }
 }
