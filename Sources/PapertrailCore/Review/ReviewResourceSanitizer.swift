@@ -45,20 +45,29 @@ public struct ReviewResourceSanitizer: Sendable {
       #"(?is)\s+on[a-z0-9_-]+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)"#,
       #"(?is)\s+(?:srcset|poster|background|action|formaction|ping|download|target)\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)"#,
     ]
-    for pattern in forbiddenAttributes {
-      let before = html
-      html = try replace(pattern, in: html, with: "")
-      if html != before { removed.insert("active-attribute") }
-    }
-
-    html = try rewriteAttribute("href", in: html) { value in
-      if value.hasPrefix("#") || isSafeLocalResource(value, requiredPrefix: nil) { return value }
-      if isApprovedExternalLink(value) {
-        preserved.insert(value)
-        return value
+    // Attribute patterns run inside tags only: over prose they deleted words ("target = r").
+    html = try rewriteTags(in: html) { tag in
+      var tag = tag
+      for pattern in forbiddenAttributes {
+        let before = tag
+        tag = try replace(pattern, in: tag, with: "")
+        if tag != before { removed.insert("active-attribute") }
       }
-      removed.insert("unsafe-href")
-      return nil
+      tag = try rewriteAttribute("href", in: tag) { value in
+        if value.hasPrefix("#") || isSafeLocalResource(value, requiredPrefix: nil) { return value }
+        if isApprovedExternalLink(value) {
+          preserved.insert(value)
+          return value
+        }
+        removed.insert("unsafe-href")
+        return nil
+      }
+      let beforeInlineStyle = tag
+      tag = try replace(
+        #"(?is)\s+style\s*=\s*("[^"]*(?:url\s*\(|expression\s*\(|@import)[^"]*"|'[^']*(?:url\s*\(|expression\s*\(|@import)[^']*')"#,
+        in: tag, with: "")
+      if tag != beforeInlineStyle { removed.insert("unsafe-inline-css") }
+      return tag
     }
     html = try annotateApprovedExternalLinks(html)
 
@@ -78,11 +87,6 @@ public struct ReviewResourceSanitizer: Sendable {
       }
       html = html.replacingOccurrences(of: block, with: cleaned)
     }
-    let beforeInlineStyle = html
-    html = try replace(
-      #"(?is)\s+style\s*=\s*("[^"]*(?:url\s*\(|expression\s*\(|@import)[^"]*"|'[^']*(?:url\s*\(|expression\s*\(|@import)[^']*')"#,
-      in: html, with: "")
-    if html != beforeInlineStyle { removed.insert("unsafe-inline-css") }
 
     let csp = Self.contentSecurityPolicy
     let cspTag =
@@ -98,6 +102,27 @@ public struct ReviewResourceSanitizer: Sendable {
       report: ReviewSanitizationReport(
         removedConstructs: removed.sorted(),
         preservedConfirmedExternalLinks: preserved.sorted(), csp: csp))
+  }
+
+  /// One start or end tag; quoted values may hold `>`. Text between tags is escaped by the
+  /// renderer, so only these can carry attributes or markup.
+  static let tagPattern = #"<[a-zA-Z/!](?:[^>"']|"[^"]*"|'[^']*')*>"#
+
+  private func rewriteTags(
+    in source: String, transform: (String) throws -> String
+  ) throws -> String {
+    let regex = try NSRegularExpression(pattern: Self.tagPattern)
+    let ns = source as NSString
+    var result = source
+    // From the end, so earlier match ranges stay valid while later tags change length.
+    for match in regex.matches(in: source, range: NSRange(location: 0, length: ns.length)).reversed() {
+      let tag = ns.substring(with: match.range)
+      let rewritten = try transform(tag)
+      if rewritten != tag, let range = Range(match.range, in: result) {
+        result.replaceSubrange(range, with: rewritten)
+      }
+    }
+    return result
   }
 
   private func rewriteAttribute(

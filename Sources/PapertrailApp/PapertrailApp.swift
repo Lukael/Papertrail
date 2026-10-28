@@ -39,14 +39,21 @@ struct PapertrailApp: App {
             container: container, paths: resolvedPaths)
           let issues = try ApplicationLaunchCoordinator.reconcile(
             container: container, paths: resolvedPaths)
+          // Only at launch: nothing can be generating yet, so a `running` generation was cut off.
+          // Per-paper reconciling interrupted live generations of other papers.
+          let interrupted = try SwiftDataReviewGenerationStore(container: container)
+            .reconcileInterruptedGenerations()
         #else
           let store = try ModelContainerFactory.make(at: resolvedPaths.storeURL)
           let reset = try AgentChatResetMigration.runIfNeeded(store: store, paths: resolvedPaths)
           let issues = try ApplicationLaunchCoordinator.reconcile(
             store: store, paths: resolvedPaths)
+          let interrupted = try PortableReviewGenerationStore(store: store)
+            .reconcileInterruptedGenerations()
         #endif
-        if !issues.isEmpty {
-          repairMessage = "The local library opened with \(issues.count) recoverable item(s)."
+        if !issues.isEmpty || !interrupted.isEmpty {
+          repairMessage =
+            "The local library opened with \(issues.count + interrupted.count) recoverable item(s)."
         }
         if let reset, reset.deletedSessionCount > 0 || reset.fileCleanupPending {
           let note =

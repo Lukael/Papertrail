@@ -11,16 +11,27 @@ struct ChatLiveAssistantState: Equatable, Sendable {
   var response: String?
 }
 
+/// The composer's text, published apart from the controller so a keystroke re-renders only
+/// the composer rather than every transcript observer.
+@MainActor
+final class ChatDraft: ObservableObject {
+  @Published var text = ""
+}
+
 @MainActor
 final class PaperChatController: ObservableObject {
-  @Published var input = ""
+  let draft = ChatDraft()
+  var input: String {
+    get { draft.text }
+    set { draft.text = newValue }
+  }
   @Published private(set) var messages: [ChatMessageRecord] = []
   @Published private(set) var isRunning = false
   @Published private(set) var isLoading = true
   @Published private(set) var isRefreshingContext = false
-  @Published var status: String?
+  // Only feeds the activity log; publishing it re-rendered the transcript for nothing.
+  var status: String?
   @Published private(set) var liveAssistant: ChatLiveAssistantState?
-  @Published private(set) var liveRevision = 0
 
   private let paperID: UUID
   private let store: any PaperChatStore
@@ -85,10 +96,10 @@ final class PaperChatController: ObservableObject {
         role: "user", content: trimmedInput, draft: nil,
         deliveryState: "sending", createdAt: Date()))
     liveAssistant = ChatLiveAssistantState(reasoning: "Thinking…", response: nil)
-    liveRevision += 1
     status = "Claude is answering in this paper's private session…"
     activityLog.append(level: .info, status ?? "Chat request started.")
     Task {
+      var failed = false
       do {
         let coordinator = try await resolvedCoordinator()
         let result = try await coordinator.send(
@@ -98,13 +109,20 @@ final class PaperChatController: ObservableObject {
           level: result.outcome == .turnCompleted ? .success : .warning,
           status ?? "Chat request completed.")
       } catch {
+        failed = true
         status = "Chat failed recoverably: \(error.localizedDescription)"
         activityLog.append(level: .error, status ?? "Chat request failed.")
       }
       isRunning = false
       await reloadNow()
       liveAssistant = nil
-      liveRevision += 1
+      // A send that failed before the message was stored (logged out, oversized, no PDF text)
+      // would otherwise lose what the user typed.
+      if failed, input.isEmpty,
+        !messages.contains(where: { $0.role == "user" && $0.content == trimmedInput })
+      {
+        input = trimmedInput
+      }
     }
   }
 
@@ -117,8 +135,13 @@ final class PaperChatController: ObservableObject {
 
   func canRetry(_ message: ChatMessageRecord) -> Bool {
     message.role == "user" && message.operationID != nil
-      && ["failed", "cancelled", "interrupted", "protocolFailure"]
+      // The store keeps a timed-out turn's raw outcome on its message.
+      && ["failed", "cancelled", "interrupted", "protocolFailure", "timedOut"]
         .contains(message.deliveryState)
+      // A retry re-sends the same text; once it exists, retrying the original only duplicates it.
+      && !messages.contains {
+        $0.role == "user" && $0.createdAt > message.createdAt && $0.content == message.content
+      }
   }
 
   func retry(_ message: ChatMessageRecord) {
@@ -126,7 +149,6 @@ final class PaperChatController: ObservableObject {
     else { return }
     isRunning = true
     liveAssistant = ChatLiveAssistantState(reasoning: "Thinking…", response: nil)
-    liveRevision += 1
     status = "Retrying as a new durable operation…"
     activityLog.append(level: .info, status ?? "Chat retry started.")
     Task {
@@ -144,7 +166,6 @@ final class PaperChatController: ObservableObject {
       isRunning = false
       await reloadNow()
       liveAssistant = nil
-      liveRevision += 1
     }
   }
 
@@ -216,7 +237,6 @@ final class PaperChatController: ObservableObject {
         case .draft:
           break
         }
-        self.liveRevision += 1
         self.activityLog.upsert(
           key: "chat-\(update.itemID ?? update.kind.rawValue)", source: .agent,
           message: update.text)

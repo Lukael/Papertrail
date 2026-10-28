@@ -104,6 +104,28 @@ enum Gate0GTests {
       "legacy image element or background attribute survived")
     try expect(legacyImages.report.removedConstructs.contains("tag:img"), "image removal was not reported")
     try expect(legacyImages.report.removedConstructs.contains("tag:image"), "image element removal was not reported")
+
+    // Attribute-like prose is escaped text: it must survive sanitizing and pass validation,
+    // while the same attributes on a tag are still stripped and rejected.
+    let prose = "DQN target = r + γ max Q, action = a_t, one = 1; data:image/png, @import and href = x are words."
+    let mixed = try ReviewResourceSanitizer().sanitize(
+      "<html><head></head><body><p>\(prose)</p><a href=\"#x\" onclick=\"steal()\" target=_blank>link</a><p id=\"x\">end</p></body></html>")
+    try expect(mixed.html.contains(prose), "sanitizer changed attribute-like prose")
+    try expect(
+      !mixed.html.contains("onclick") && !mixed.html.contains("_blank"),
+      "tag attributes survived beside attribute-like prose")
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let proseReport = try ReviewValidator().validate(reviewDirectory: directory, html: mixed.html)
+    try expect(
+      !proseReport.findings.contains { $0.code == "forbidden-construct" },
+      "validator rejected attribute-like prose: \(proseReport.findings)")
+    let hostileReport = try ReviewValidator().validate(
+      reviewDirectory: directory, html: mixed.html.replacingOccurrences(of: "<p id=", with: "<p onclick=\"x\" id="))
+    try expect(
+      hostileReport.findings.contains { $0.code == "forbidden-construct" },
+      "validator accepted an event attribute on a tag")
   }
 
   static func testAppWebKitSource() async throws {

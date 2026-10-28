@@ -84,6 +84,8 @@ public struct PaperNoteStore: Sendable {
   /// Validates before replacing the file; the atomic write replaces a planted symlink rather
   /// than following it.
   public func save(_ notes: [PaperNote], paperID: UUID) throws {
+    // A file that cannot be read was never loaded, so replacing it would drop its notes.
+    _ = try load(paperID: paperID)
     guard notes.count <= Self.maximumNoteCount else {
       throw PaperNoteStoreError.tooManyNotes(maximum: Self.maximumNoteCount)
     }

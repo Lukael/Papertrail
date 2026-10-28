@@ -466,7 +466,8 @@ struct PaperWorkspaceView: View {
   let paper: PaperListItem
   @ObservedObject var controller: PaperLibraryController
   @ObservedObject var reviewController: ReviewGenerationController
-  @ObservedObject var chatController: PaperChatController
+  // Not observed: PaperChatView observes it, so typing and live replies leave the PDF alone.
+  let chatController: PaperChatController
   @ObservedObject var notes: PaperNotesModel
   @State private var showsPaper = true
   @State private var showsNotes = false
@@ -857,6 +858,9 @@ private struct ReviewGenerationView: View {
           ProgressView().controlSize(.small)
         }
         Spacer()
+        Button("Export PowerPoint…", systemImage: "square.and.arrow.up") { exportDeck() }
+          .disabled(controller.selectedReviewLocation == nil || controller.isExporting)
+          .help("Save the selected version as a .pptx deck with the paper's figures. Google Slides and Keynote open it too.")
         Menu("Versions") {
           let selected = controller.selectedVersionID
           // Newest first; numbers follow creation order so a version keeps its name.
@@ -888,6 +892,14 @@ private struct ReviewGenerationView: View {
     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
     .accessibilityElement(children: .contain)
     .accessibilityLabel("Review reader")
+  }
+
+  private func exportDeck() {
+    let panel = NSSavePanel()
+    panel.allowedContentTypes = [UTType(filenameExtension: "pptx") ?? .data]
+    panel.nameFieldStringValue = controller.deckFileName
+    guard panel.runModal() == .OK, let url = panel.url else { return }
+    controller.exportDeck(to: url)
   }
 
   private func versionTitle(_ generation: ReviewGenerationRecord, number: Int) -> String {
@@ -960,8 +972,6 @@ private struct PaperChatView: View {
   @AppStorage("chatTextSizePercent") private var textSizePercent = 100
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @State private var activeQuestionID: UUID?
-  @State private var isTranscriptNearBottom = true
-  @State private var transcriptMetrics = ChatTranscriptMetrics()
   @State private var visibleMessageLimit = ChatTranscriptWindow.pageSize
 
   var body: some View {
@@ -999,139 +1009,110 @@ private struct PaperChatView: View {
       .padding(.top)
       .padding(.bottom, 10)
       Divider()
-      ScrollViewReader { proxy in
-        ZStack(alignment: .trailing) {
-          ScrollView {
-            // Keep native math views mounted: lazy recycling can leave WebKit blank.
-            VStack(alignment: .leading, spacing: 18) {
-              if firstVisibleIndex > 0 {
-                Button("Load earlier messages (\(firstVisibleIndex))") {
-                  let anchor = controller.messages[firstVisibleIndex].id
-                  isTranscriptNearBottom = false
-                  visibleMessageLimit += ChatTranscriptWindow.pageSize
-                  DispatchQueue.main.async { proxy.scrollTo(anchor, anchor: .top) }
+      // GeometryReader sizes to its proposal, so HSplitView's size queries on every
+      // keystroke or live update no longer lay out the whole transcript.
+      GeometryReader { _ in
+        ScrollViewReader { proxy in
+          ZStack(alignment: .trailing) {
+            ScrollView {
+              // Keep native math views mounted: lazy recycling can leave WebKit blank.
+              VStack(alignment: .leading, spacing: 18) {
+                if firstVisibleIndex > 0 {
+                  Button("Load earlier messages (\(firstVisibleIndex))") {
+                    let anchor = controller.messages[firstVisibleIndex].id
+                    visibleMessageLimit += ChatTranscriptWindow.pageSize
+                    DispatchQueue.main.async { proxy.scrollTo(anchor, anchor: .top) }
+                  }
+                  .frame(maxWidth: .infinity)
                 }
-                .frame(maxWidth: .infinity)
-              }
-              if controller.isLoading && controller.messages.isEmpty {
-                ProgressView("Loading conversation…")
+                if controller.isLoading && controller.messages.isEmpty {
+                  ProgressView("Loading conversation…")
+                    .frame(maxWidth: .infinity, minHeight: 240)
+                } else if controller.messages.isEmpty {
+                  ContentUnavailableView {
+                    Label("Start a conversation", systemImage: "bubble.left.and.bubble.right")
+                  } description: {
+                    Text("Ask about this paper. Messages are stored by the app and survive relaunch.")
+                  }
                   .frame(maxWidth: .infinity, minHeight: 240)
-              } else if controller.messages.isEmpty {
-                ContentUnavailableView {
-                  Label("Start a conversation", systemImage: "bubble.left.and.bubble.right")
-                } description: {
-                  Text("Ask about this paper. Messages are stored by the app and survive relaunch.")
                 }
-                .frame(maxWidth: .infinity, minHeight: 240)
-              }
-              ForEach(controller.messages.suffix(from: firstVisibleIndex)) { message in
-                ChatMessageRow(
-                  message: message,
-                  questionNumber: questionNumbers[message.id],
-                  questionCount: questions.count,
-                  isActiveQuestion: message.id == activeQuestionID,
-                  canRetry: controller.canRetry(message) && !controller.isRunning,
-                  onRetry: { controller.retry(message) },
-                  isSavedAsNote: savedNoteMessageIDs.contains(message.id),
-                  onSaveNote: onSaveNote.map { save in { save(message) } })
-                .id(message.id)
-                .background {
-                  if message.role == "user" {
-                    GeometryReader { geometry in
-                      Color.clear.preference(
-                        key: ChatQuestionOffsetPreferenceKey.self,
-                        value: [
-                          message.id: geometry.frame(in: .named("paper-chat-scroll")).minY
-                        ])
+                ForEach(controller.messages.suffix(from: firstVisibleIndex)) { message in
+                  ChatMessageRow(
+                    message: message,
+                    questionNumber: questionNumbers[message.id],
+                    questionCount: questions.count,
+                    isActiveQuestion: message.id == activeQuestionID,
+                    canRetry: controller.canRetry(message) && !controller.isRunning,
+                    onRetry: { controller.retry(message) },
+                    isSavedAsNote: savedNoteMessageIDs.contains(message.id),
+                    onSaveNote: onSaveNote.map { save in { save(message) } })
+                  .equatable()
+                  .id(message.id)
+                  .background {
+                    if message.role == "user" {
+                      GeometryReader { geometry in
+                        Color.clear.preference(
+                          key: ChatQuestionOffsetPreferenceKey.self,
+                          value: [
+                            message.id: geometry.frame(in: .named("paper-chat-scroll")).minY
+                          ])
+                      }
                     }
                   }
                 }
+                if let live = controller.liveAssistant {
+                  ChatLiveResponseRow(state: live)
+                }
+                Color.clear
+                  .frame(height: 1)
+                  .id("chat-bottom")
               }
-              if let live = controller.liveAssistant {
-                ChatLiveResponseRow(state: live)
-                  .id("live-assistant")
-              }
-              Color.clear
-                .frame(height: 1)
-                .id("chat-bottom")
-                .background {
-                  GeometryReader { geometry in
-                    Color.clear.preference(
-                      key: ChatBottomOffsetPreferenceKey.self,
-                      value: geometry.frame(in: .named("paper-chat-scroll")).maxY)
+              .frame(maxWidth: .infinity, alignment: .leading)
+              .padding()
+              .background(ChatScrollBoundaryView())
+            }
+            // Keep the transcript and the native scroll indicator out of the
+            // trailing question-navigation rail, including at narrow widths.
+            .padding(.trailing, 52)
+            .coordinateSpace(name: "paper-chat-scroll")
+            .onPreferenceChange(ChatQuestionOffsetPreferenceKey.self) { offsets in
+              updateActiveQuestion(from: offsets)
+            }
+
+            if !questions.isEmpty {
+              ChatQuestionRail(
+                questions: questions,
+                activeQuestionID: activeQuestionID,
+                onSelect: { questionID in
+                  activeQuestionID = questionID
+                  if let index = controller.messages.firstIndex(where: { $0.id == questionID }),
+                    index < firstVisibleIndex
+                  {
+                    visibleMessageLimit = ChatTranscriptWindow.limitRevealing(
+                      index: index, count: controller.messages.count,
+                      currentLimit: visibleMessageLimit)
+                    DispatchQueue.main.async { scroll(proxy, to: questionID, anchor: .top) }
+                  } else {
+                    scroll(proxy, to: questionID, anchor: .top)
                   }
                 }
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding()
-            .background(ChatScrollBoundaryView())
-          }
-          // Keep the transcript and the native scroll indicator out of the
-          // trailing question-navigation rail, including at narrow widths.
-          .padding(.trailing, 52)
-          .coordinateSpace(name: "paper-chat-scroll")
-          .background {
-            GeometryReader { geometry in
-              Color.clear.preference(
-                key: ChatViewportHeightPreferenceKey.self,
-                value: geometry.size.height)
+              )
+              .padding(.trailing, 10)
+              .padding(.vertical, 14)
             }
           }
-          .onPreferenceChange(ChatViewportHeightPreferenceKey.self) { height in
-            transcriptMetrics.viewportHeight = height
-            updateTranscriptFollowState()
-          }
-          .onPreferenceChange(ChatQuestionOffsetPreferenceKey.self) { offsets in
-            updateActiveQuestion(from: offsets)
-          }
-          .onPreferenceChange(ChatBottomOffsetPreferenceKey.self) { bottomOffset in
-            transcriptMetrics.bottomOffset = bottomOffset
-            updateTranscriptFollowState()
-          }
-
-          if !questions.isEmpty {
-            ChatQuestionRail(
-              questions: questions,
-              activeQuestionID: activeQuestionID,
-              onSelect: { questionID in
-                activeQuestionID = questionID
-                isTranscriptNearBottom = false
-                if let index = controller.messages.firstIndex(where: { $0.id == questionID }),
-                  index < firstVisibleIndex
-                {
-                  visibleMessageLimit = ChatTranscriptWindow.limitRevealing(
-                    index: index, count: controller.messages.count,
-                    currentLimit: visibleMessageLimit)
-                  DispatchQueue.main.async { scroll(proxy, to: questionID, anchor: .top) }
-                } else {
-                  scroll(proxy, to: questionID, anchor: .top)
-                }
-              }
-            )
-            .padding(.trailing, 10)
-            .padding(.vertical, 14)
-          }
-        }
-        .onChange(of: controller.messages.count) { oldCount, newCount in
-          visibleMessageLimit = ChatTranscriptWindow.adjustedLimit(
-            visibleMessageLimit, oldCount: oldCount, newCount: newCount)
-          if let last = controller.messages.last {
-            if last.role == "user" {
+          .onChange(of: controller.messages.count) { oldCount, newCount in
+            visibleMessageLimit = ChatTranscriptWindow.adjustedLimit(
+              visibleMessageLimit, oldCount: oldCount, newCount: newCount)
+            // Growth while the reader is at the end is followed by ChatScrollBoundaryView.
+            if let last = controller.messages.last, last.role == "user" {
               activeQuestionID = last.id
-              isTranscriptNearBottom = true
-              proxy.scrollTo("chat-bottom", anchor: .bottom)
-            } else if isTranscriptNearBottom {
               proxy.scrollTo("chat-bottom", anchor: .bottom)
             }
           }
-        }
-        .onChange(of: controller.liveRevision) {
-          if controller.liveAssistant != nil, isTranscriptNearBottom {
-            proxy.scrollTo("live-assistant", anchor: .bottom)
+          .onAppear {
+            if activeQuestionID == nil { activeQuestionID = questions.last?.id }
           }
-        }
-        .onAppear {
-          if activeQuestionID == nil { activeQuestionID = questions.last?.id }
         }
       }
       .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -1154,16 +1135,6 @@ private struct PaperChatView: View {
     }
   }
 
-  private func updateTranscriptFollowState() {
-    guard transcriptMetrics.viewportHeight > 0 else { return }
-    let isNearBottom = transcriptMetrics.bottomOffset.map {
-      $0 <= transcriptMetrics.viewportHeight + 96
-    } ?? false
-    if isNearBottom != isTranscriptNearBottom {
-      isTranscriptNearBottom = isNearBottom
-    }
-  }
-
   private func scroll(_ proxy: ScrollViewProxy, to questionID: UUID, anchor: UnitPoint) {
     if reduceMotion {
       proxy.scrollTo(questionID, anchor: anchor)
@@ -1175,7 +1146,7 @@ private struct PaperChatView: View {
   }
 
   private var chatComposerPanel: some View {
-    chatComposer
+    ChatComposer(controller: controller, draft: controller.draft)
     .frame(maxWidth: .infinity)
     .padding(.horizontal, 14)
     .padding(.top, 10)
@@ -1186,12 +1157,18 @@ private struct PaperChatView: View {
     .background(.bar)
     .overlay(alignment: .top) { Divider() }
   }
+}
 
-  private var chatComposer: some View {
+/// Observes the draft on its own so typing never re-renders the transcript.
+private struct ChatComposer: View {
+  @ObservedObject var controller: PaperChatController
+  @ObservedObject var draft: ChatDraft
+
+  var body: some View {
     HStack(alignment: .bottom, spacing: 10) {
       // Disabling the active field can re-enter SwiftUI through IME teardown.
       // The controller blocks duplicate sends while the next draft stays editable.
-      ChatComposerField(text: $controller.input, onSubmit: controller.send)
+      ChatComposerField(text: $draft.text, onSubmit: controller.send)
 
       if controller.isRunning {
         Button("Cancel", systemImage: "stop.fill", role: .destructive) {
@@ -1206,7 +1183,7 @@ private struct PaperChatView: View {
           .buttonBorderShape(.circle)
           .controlSize(.small)
           .disabled(
-            controller.input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            draft.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
               || !controller.isAvailable)
           .help("Send message")
       }
@@ -1224,33 +1201,11 @@ private struct PaperChatView: View {
 }
 
 /// High-frequency geometry samples must not invalidate the full transcript.
-/// Only derived navigation/follow-state changes are published through SwiftUI state.
-private final class ChatTranscriptMetrics {
-  var viewportHeight: CGFloat = 0
-  var bottomOffset: CGFloat?
-}
-
 private struct ChatQuestionOffsetPreferenceKey: PreferenceKey {
   static let defaultValue: [UUID: CGFloat] = [:]
 
   static func reduce(value: inout [UUID: CGFloat], nextValue: () -> [UUID: CGFloat]) {
     value.merge(nextValue(), uniquingKeysWith: { _, new in new })
-  }
-}
-
-private struct ChatBottomOffsetPreferenceKey: PreferenceKey {
-  static let defaultValue: CGFloat? = nil
-
-  static func reduce(value: inout CGFloat?, nextValue: () -> CGFloat?) {
-    value = nextValue() ?? value
-  }
-}
-
-private struct ChatViewportHeightPreferenceKey: PreferenceKey {
-  static let defaultValue: CGFloat = 0
-
-  static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
-    value = nextValue()
   }
 }
 
@@ -1535,6 +1490,16 @@ private struct ChatMessageRow: View {
         }
       }
     }
+  }
+}
+
+extension ChatMessageRow: Equatable {
+  // The callbacks are rebuilt on every transcript render; comparing only what the row
+  // draws lets live replies skip every unchanged message instead of re-rendering all of them.
+  nonisolated static func == (lhs: Self, rhs: Self) -> Bool {
+    lhs.message == rhs.message && lhs.questionNumber == rhs.questionNumber
+      && lhs.questionCount == rhs.questionCount && lhs.isActiveQuestion == rhs.isActiveQuestion
+      && lhs.canRetry == rhs.canRetry && lhs.isSavedAsNote == rhs.isSavedAsNote
   }
 }
 

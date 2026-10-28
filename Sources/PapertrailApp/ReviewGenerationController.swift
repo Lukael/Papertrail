@@ -1,4 +1,5 @@
 import Foundation
+import PDFKit
 import PapertrailCore
 import SwiftUI
 
@@ -9,7 +10,11 @@ import SwiftUI
 @MainActor
 final class ReviewGenerationController: ObservableObject {
   @Published private(set) var generations: [ReviewGenerationRecord] = []
+  // Resolved on reload, not per render: each lookup is a store fetch plus path checks.
+  @Published private(set) var selectedVersionID: UUID?
+  @Published private(set) var selectedReviewLocation: SelectedReviewLocation?
   @Published private(set) var isRunning = false
+  @Published private(set) var isExporting = false
   @Published var status: String?
 
   let paperID: UUID
@@ -85,8 +90,8 @@ final class ReviewGenerationController: ObservableObject {
     reconcileAndReload()
   }
 
-  var selectedReviewLocation: SelectedReviewLocation? {
-    guard let paper = try? store.paper(id: paperID), let selected = paper.selectedReviewVersionID,
+  private func resolvedSelectedLocation() -> SelectedReviewLocation? {
+    guard let selected = selectedVersionID,
       let record = generations.first(where: { $0.reviewVersionID == selected }),
       let versionID = record.reviewVersionID, let relative = record.reviewRelativePath
     else { return nil }
@@ -95,8 +100,6 @@ final class ReviewGenerationController: ObservableObject {
       persistedRelativePath: relative)
     return (try? location.resolve()) == nil ? nil : location
   }
-
-  var selectedVersionID: UUID? { (try? store.paper(id: paperID))?.selectedReviewVersionID }
 
   /// Verified excerpts of the selected review, read from its rendered document.
   func selectedEvidence() -> [ReviewEvidenceAnchor] {
@@ -218,6 +221,57 @@ final class ReviewGenerationController: ObservableObject {
       message: "\(liveStatus) · \(clock)")
   }
 
+  /// The paper's title as a file name for the exported deck.
+  var deckFileName: String {
+    let title = (try? store.paper(id: paperID))?.title ?? "Review"
+    return title.replacingOccurrences(of: "/", with: "-").replacingOccurrences(of: ":", with: "-")
+      + ".pptx"
+  }
+
+  /// Writes the selected version as a PowerPoint deck with figures cropped from the paper's PDF.
+  func exportDeck(to destination: URL) {
+    guard !isExporting else { return }
+    guard let selected = selectedVersionID,
+      let record = generations.first(where: { $0.reviewVersionID == selected }),
+      let operationID = record.operationID, let paper = try? store.paper(id: paperID)
+    else {
+      status = "The selected review version cannot be exported."
+      activityLog.append(level: .error, status ?? "Presentation export failed.")
+      return
+    }
+    isExporting = true
+    status = "Exporting the presentation…"
+    Task {
+      let result = await Task.detached(priority: .userInitiated) { [paths, paperID] in
+        Result {
+          let workspace = try paths.url(forRelativePath: record.workspaceRelativePath)
+          let source = try paths.url(forRelativePath: paper.sourceRelativePath)
+          let document = try ReviewDeckExporter.promotedDocument(
+            workspace: workspace, operationID: operationID
+          ) {
+            try PDFExtractedTextCache(paths: paths).resolve(
+              paperID: paperID, sourceURL: source, expectedSourceSHA256: paper.sourceSHA256
+            ).readPages()
+          }
+          return try ReviewDeckExporter().export(
+            document: document, paperTitle: paper.title, pdf: PDFDocument(url: source),
+            to: destination)
+        }
+      }.value
+      switch result {
+      case .success(let summary):
+        let missing = summary.figureCount - summary.placedFigureCount
+        status = "Exported \(summary.slideCount) slides to \(destination.lastPathComponent)"
+          + (missing == 0 ? "" : " · \(missing) of \(summary.figureCount) figures not found in the PDF")
+        activityLog.append(level: missing == 0 ? .success : .warning, status ?? "Presentation exported.")
+      case .failure(let error):
+        status = "The presentation could not be exported: \(error.localizedDescription)"
+        activityLog.append(level: .error, status ?? "Presentation export failed.")
+      }
+      isExporting = false
+    }
+  }
+
   func cancel() {
     cancellation?.cancel()
     status = "Cancellation requested. Prior review versions remain unchanged."
@@ -237,12 +291,9 @@ final class ReviewGenerationController: ObservableObject {
   }
 
   private func reconcileAndReload() {
+    // Interrupted generations are reconciled once at launch (PapertrailApp.init): doing it per
+    // paper marked other papers' live generations as interrupted.
     do {
-      let interrupted = try store.reconcileInterruptedGenerations()
-      if !interrupted.isEmpty {
-        status = "Recovered \(interrupted.count) interrupted generation(s); prior selections were preserved."
-        activityLog.append(level: .warning, status ?? "Interrupted generations recovered.")
-      }
       let promotions = try ReviewPromotionReconciler().reconcile(
         paperID: paperID, paths: paths, store: store)
       if !promotions.isEmpty {
@@ -263,6 +314,8 @@ final class ReviewGenerationController: ObservableObject {
       status = "Review history could not be loaded: \(error.localizedDescription)"
       activityLog.append(level: .error, status ?? "Review history load failed.")
     }
+    selectedVersionID = (try? store.paper(id: paperID))?.selectedReviewVersionID
+    selectedReviewLocation = resolvedSelectedLocation()
   }
 
 }

@@ -760,7 +760,7 @@ enum Gate0ETests {
       "controller.selectAgentModel",
       "Menu {", "chatComposerPanel", ".safeAreaInset(edge: .bottom", "ChatMessageRow",
       ".frame(maxWidth: .infinity, alignment: isUser ? .trailing : .leading)",
-      ".padding(.bottom, 40)", "ChatLiveResponseRow", "Thinking", "liveRevision",
+      ".padding(.bottom, 40)", "ChatLiveResponseRow", "Thinking",
     ] { try expect(view.contains(required), "chat UI lacks \(required)") }
     try expect(!view.contains("Menu(\"Section\""), "workspace retained the redundant Section menu")
     for removedButton in [
@@ -769,7 +769,8 @@ enum Gate0ETests {
       try expect(!view.contains(removedButton), "workspace toolbar retained \(removedButton)")
     }
     for required in [
-      "@ObservedObject var reviewController", "@ObservedObject var chatController",
+      // The chat controller is passed unobserved so typing and replies leave the PDF alone.
+      "@ObservedObject var reviewController", "let chatController: PaperChatController",
       ".id(selectedPaper.id)",
     ] {
       try expect(

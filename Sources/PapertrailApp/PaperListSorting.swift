@@ -32,8 +32,8 @@ struct PaperListItem: Identifiable, Hashable, Sendable {
   let title: String
   let sourceRelativePath: String
   let sourceSHA256: String
-  let pageIndex: Int
-  let scale: Double
+  var pageIndex: Int
+  var scale: Double
   let createdAt: Date
   let lastChatAt: Date?
   var tags: [String] = []
