@@ -6,13 +6,14 @@
 
 ## 최신 릴리즈
 
-[v2.0.0 릴리즈 노트](Releases/v2.0.0.md)에 Claude Code 전환, 발표 형식 리뷰, PDF 근거 연결과
-하이라이트·메모, 검증 범위를 정리합니다.
+[v2.1.0 릴리즈 노트](Releases/v2.1.0.md)에 PowerPoint 내보내기, 긴 대화의 입력·응답 지연 수정,
+채팅 시작 위치, 리뷰 본문 보존, 검증 범위를 정리합니다.
+Claude Code 전환, 발표 형식 리뷰, PDF 근거 연결과 하이라이트·메모는 [v2.0.0](Releases/v2.0.0.md)을 참고합니다.
 PDF 검색·채팅 줄바꿈·다크 모드 수정은 [v1.2.0](Releases/v1.2.0.md)을 참고합니다.
 질문 미리보기와 클릭 영역 수정은 [v1.1.2](Releases/v1.1.2.md)를 참고합니다.
 채팅 읽기 화면 개선은 [v1.1.1](Releases/v1.1.1.md)을 참고합니다.
 이전 기능 릴리즈는 [v1.1.0](Releases/v1.1.0.md)을 참고합니다.
-로컬 검증 로그는 `.build/scenarios/release-2.0.0`에 보관합니다.
+로컬 검증 로그는 `.build/scenarios/release-2.1.0`에 보관합니다.
 
 ## 회귀 테스트
 
@@ -61,6 +62,8 @@ DEVELOPER_DIR=/Library/Developer/CommandLineTools swift run --disable-sandbox Ch
 
 트랙패드 회귀 검사는 전체 제스처 1,000회와 실제 SwiftUI 채팅 View의 관성 이동을 검사합니다.
 일반 채팅 60개와 수식 포함 채팅 20개를 별도 창에 표시하며 사용자 앱에 입력을 보내지 않습니다.
+채팅이 가장 최근 메시지에서 열리는지, 재실행처럼 기록이 늦게 도착해도 끝에 머무는지, 끝에 있을 때만
+스트리밍 답변을 따라가는지도 검사합니다.
 로그는 `.build/scenarios/scroll-render`에 저장합니다. 합성 이벤트 검사이므로 물리 트랙패드의
 WindowServer 전달 경로와 실제 프레임 속도 측정을 대신하지 않습니다.
 
@@ -110,7 +113,8 @@ swiftc -module-cache-path .build/ModuleCache -parse-as-library \
 
 ## 하이라이트와 메모
 
-메모 저장소 검사는 임시 라이브러리에서 저장·다시 읽기, 크기 제한, 심볼릭 링크 거부를 확인합니다.
+메모 저장소 검사는 임시 라이브러리에서 저장·다시 읽기, 크기 제한, 읽을 수 없는 파일 보호,
+심볼릭 링크 거부를 확인합니다.
 PDF 하이라이트 그리기·우클릭 위치 판정·삭제는 아래 PDF 검사에 포함됩니다.
 
 ```sh
