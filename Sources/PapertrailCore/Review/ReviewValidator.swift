@@ -89,6 +89,10 @@ public struct ReviewValidator: Sendable {
     {
       fail("csp", "Required restrictive CSP is absent")
     }
+    // Scan markup only (tags and style blocks): prose is escaped text, and a review that merely
+    // mentions "one =" or "data:image/" was rejected after a paid run.
+    let markup = (try capture("(\(ReviewResourceSanitizer.tagPattern))", in: html)
+      + capture(#"(?is)<style\b[^>]*>(.*?)</style\s*>"#, in: html)).joined(separator: "\n")
     for pattern in [
       #"(?is)<(?:script|base|iframe|frame|form|input|button|object|embed|applet|audio|video|svg|img|image)\b"#,
       #"(?is)\son[a-z0-9_-]+\s*="#,
@@ -96,7 +100,7 @@ public struct ReviewValidator: Sendable {
       #"(?is)(?:src|srcset|poster)\s*=\s*["']\s*(?:https?:|file:|//|/|\.\.)"#,
       #"(?is)@import|@font-face|url\s*\(\s*["']?(?:https?:|file:|//|/|\.\.)"#,
       #"(?is)javascript:|data:text/html|data:image/"#,
-    ] where html.range(of: pattern, options: .regularExpression) != nil {
+    ] where markup.range(of: pattern, options: .regularExpression) != nil {
       fail("forbidden-construct", pattern)
     }
 
