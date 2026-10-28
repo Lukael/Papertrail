@@ -64,6 +64,8 @@ public struct PaperTagStore: Sendable {
   /// Validation finishes before the existing sidecar is replaced.
   @discardableResult
   public func save(_ tags: [String], paperID: UUID) throws -> [String] {
+    // A file that cannot be read was never loaded, so replacing it would drop its tags.
+    _ = try load(paperID: paperID)
     let normalized = try Self.normalize(tags)
     let paperDirectory = try paperDirectoryURL(paperID: paperID)
     try requireExistingPaperDirectory(paperDirectory, paperID: paperID)

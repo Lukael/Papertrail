@@ -40,15 +40,6 @@ public struct ChatJournalRecovery: Sendable {
 public enum ChatLaunchRecovery {
   /// A journal can restore accepted message bytes, but without the supervised
   /// child exit status an operation left `running` is truthfully interrupted.
-  public static func replay(
-    operationID: UUID, journalDirectoryURL: URL, fileManager: FileManager = .default
-  ) throws -> [RecoveredAssistantMessage] {
-    try replayWithReport(
-      operationID: operationID, journalDirectoryURL: journalDirectoryURL,
-      fileManager: fileManager
-    ).messages
-  }
-
   public static func replayWithReport(
     operationID: UUID, journalDirectoryURL: URL, fileManager: FileManager = .default
   ) throws -> ChatJournalRecovery {

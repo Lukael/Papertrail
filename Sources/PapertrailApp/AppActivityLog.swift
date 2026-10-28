@@ -28,9 +28,8 @@ final class AppActivityLog: ObservableObject {
   @Published private(set) var entries: [AppActivityLogEntry] = []
   private let maximumEntryCount = 500
 
-  var latest: AppActivityLogEntry? {
-    entries.max { $0.updatedAt < $1.updatedAt }
-  }
+  /// `append` and `upsert` both move the changed entry to the end.
+  var latest: AppActivityLogEntry? { entries.last }
 
   func append(
     source: AppActivityLogSource = .app,
@@ -197,7 +196,8 @@ private struct ActivityLogHistoryView: View {
         .onAppear {
           if let last = log.entries.last { proxy.scrollTo(last.id, anchor: .bottom) }
         }
-        .onChange(of: log.entries.count) {
+        // The count stops changing at the 500-entry cap and on upserts; the last id does not.
+        .onChange(of: log.entries.last?.id) {
           if let last = log.entries.last { proxy.scrollTo(last.id, anchor: .bottom) }
         }
       }

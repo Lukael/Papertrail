@@ -10,6 +10,9 @@ import SwiftUI
 @MainActor
 final class ReviewGenerationController: ObservableObject {
   @Published private(set) var generations: [ReviewGenerationRecord] = []
+  // Resolved on reload, not per render: each lookup is a store fetch plus path checks.
+  @Published private(set) var selectedVersionID: UUID?
+  @Published private(set) var selectedReviewLocation: SelectedReviewLocation?
   @Published private(set) var isRunning = false
   @Published private(set) var isExporting = false
   @Published var status: String?
@@ -87,8 +90,8 @@ final class ReviewGenerationController: ObservableObject {
     reconcileAndReload()
   }
 
-  var selectedReviewLocation: SelectedReviewLocation? {
-    guard let paper = try? store.paper(id: paperID), let selected = paper.selectedReviewVersionID,
+  private func resolvedSelectedLocation() -> SelectedReviewLocation? {
+    guard let selected = selectedVersionID,
       let record = generations.first(where: { $0.reviewVersionID == selected }),
       let versionID = record.reviewVersionID, let relative = record.reviewRelativePath
     else { return nil }
@@ -97,8 +100,6 @@ final class ReviewGenerationController: ObservableObject {
       persistedRelativePath: relative)
     return (try? location.resolve()) == nil ? nil : location
   }
-
-  var selectedVersionID: UUID? { (try? store.paper(id: paperID))?.selectedReviewVersionID }
 
   /// Verified excerpts of the selected review, read from its rendered document.
   func selectedEvidence() -> [ReviewEvidenceAnchor] {
@@ -290,12 +291,9 @@ final class ReviewGenerationController: ObservableObject {
   }
 
   private func reconcileAndReload() {
+    // Interrupted generations are reconciled once at launch (PapertrailApp.init): doing it per
+    // paper marked other papers' live generations as interrupted.
     do {
-      let interrupted = try store.reconcileInterruptedGenerations()
-      if !interrupted.isEmpty {
-        status = "Recovered \(interrupted.count) interrupted generation(s); prior selections were preserved."
-        activityLog.append(level: .warning, status ?? "Interrupted generations recovered.")
-      }
       let promotions = try ReviewPromotionReconciler().reconcile(
         paperID: paperID, paths: paths, store: store)
       if !promotions.isEmpty {
@@ -316,6 +314,8 @@ final class ReviewGenerationController: ObservableObject {
       status = "Review history could not be loaded: \(error.localizedDescription)"
       activityLog.append(level: .error, status ?? "Review history load failed.")
     }
+    selectedVersionID = (try? store.paper(id: paperID))?.selectedReviewVersionID
+    selectedReviewLocation = resolvedSelectedLocation()
   }
 
 }
